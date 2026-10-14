@@ -14,6 +14,7 @@
 .vscode/
 *.code-workspace
 *.md
+*.db
 
 # Dependencies
 *.jar

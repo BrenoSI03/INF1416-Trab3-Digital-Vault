@@ -1,15 +1,20 @@
 import java.io.ByteArrayOutputStream;
+import java.io.Console;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.PrivateKey;
+import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.sql.DriverManager;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class Tests {
     private static final char[] STORE_PASSWORD = "teste123".toCharArray();
@@ -20,6 +25,11 @@ public class Tests {
     }
 
     public static void main(String[] args) throws Exception {
+        if (args.length == 1 && "--package-t3".equals(args[0])) {
+            testOriginalPackageWithPassphrases();
+            System.out.println("OK - " + verificacoes + " verificações do Pacote-T3 executadas.");
+            return;
+        }
         Path raiz = Path.of("tests", "additional-data",
                 "run-" + System.currentTimeMillis()).toAbsolutePath();
         Path pastaVault = raiz.resolve("independent-vault");
@@ -123,6 +133,157 @@ public class Tests {
                 "chave cifrada do Pacote-T3 disponível");
         check(Files.isRegularFile(arquivos.resolve("XXYYZZ22.1.shr")),
                 "contrato codigo.ID.shr no Pacote-T3");
+    }
+
+    private static void testOriginalPackageWithPassphrases() throws Exception {
+        Console console = System.console();
+        if (console == null) {
+            throw new IllegalStateException("Execute este teste em um terminal para informar as frases sem eco.");
+        }
+        Path keys = Path.of("Pacote-T3", "Keys");
+        Path files = Path.of("Pacote-T3", "Files");
+        Map<String, Identity> identities = new HashMap<>();
+        for (String label : List.of("admin", "user01", "user02")) {
+            Path keyPath = keys.resolve(label + "-pkcs8-aes.key");
+            Path certificatePath = keys.resolve(label + "-x509.crt");
+            char[] passphrase = console.readPassword("Frase de %s: ", label);
+            if (passphrase == null) {
+                throw new IllegalStateException("Leitura da frase cancelada.");
+            }
+            try {
+                PrivateKey privateKey = CryptoUtils.loadPrivateKey(keyPath, passphrase);
+                X509Certificate certificate = CryptoUtils.loadCertificate(certificatePath);
+                check(CryptoUtils.proveKeyPair(privateKey, certificate.getPublicKey(), 10_240),
+                        "chave e certificado de " + label);
+                char[] wrongPassphrase = Arrays.copyOf(passphrase, passphrase.length + 1);
+                wrongPassphrase[wrongPassphrase.length - 1] = 'x';
+                boolean rejected = false;
+                try {
+                    CryptoUtils.loadPrivateKey(keyPath, wrongPassphrase);
+                } catch (Exception expected) {
+                    rejected = true;
+                } finally {
+                    Arrays.fill(wrongPassphrase, '\0');
+                }
+                check(rejected, "frase incorreta rejeitada para " + label);
+                identities.put(CryptoUtils.extractEmail(certificate),
+                        new Identity(CryptoUtils.extractEmail(certificate), privateKey, certificate,
+                                keyPath, Files.readAllBytes(certificatePath)));
+            } finally {
+                Arrays.fill(passphrase, '\0');
+            }
+        }
+
+        Identity admin = identities.values().stream()
+                .filter(identity -> identity.encryptedKeyPath().getFileName().toString()
+                        .startsWith("admin-"))
+                .findFirst().orElseThrow();
+        byte[] index = openPackageFile(files, "index", "index.env",
+                admin.privateKey(), admin.certificate().getPublicKey());
+        byte[] share = openPackageFile(files, "share", "share.env",
+                admin.privateKey(), admin.certificate().getPublicKey());
+        check(index.length > 0 && share.length > 0,
+                "index e share decriptados e assinaturas verificadas");
+
+        byte[] tamperedSignature = Files.readAllBytes(files.resolve("index.asd"));
+        tamperedSignature[0] ^= 1;
+        check(!CryptoUtils.verify(index, tamperedSignature, admin.certificate().getPublicKey()),
+                "assinatura adulterada do index recusada");
+
+        Map<String, Identity> owners = new HashMap<>();
+        Map<String, byte[]> plaintextByCode = new HashMap<>();
+        for (String line : new String(index, StandardCharsets.US_ASCII).split("\\R")) {
+            if (line.isBlank()) {
+                continue;
+            }
+            String[] fields = line.trim().split("\\s+");
+            check(fields.length == 4, "linha do index com quatro campos");
+            Identity owner = identities.get(fields[2]);
+            check(owner != null, "dono do arquivo encontrado no pacote");
+            byte[] plaintext = openPackageFile(files, fields[0], fields[0] + ".env",
+                    owner.privateKey(), owner.certificate().getPublicKey());
+            check(plaintext.length > 0,
+                    "arquivo do dono decriptado e assinatura verificada: " + fields[0]);
+            owners.put(fields[0], owner);
+            plaintextByCode.put(fields[0], plaintext);
+        }
+
+        for (String line : new String(share, StandardCharsets.US_ASCII).split("\\R")) {
+            if (line.isBlank()) {
+                continue;
+            }
+            String[] fields = line.trim().split("\\s+");
+            check(fields.length == 3, "linha do share com três campos");
+            Identity recipient = identities.get(fields[2]);
+            Identity owner = owners.get(fields[0]);
+            check(recipient != null && owner != null, "destinatário e dono do share encontrados");
+            byte[] sharedPlaintext = openPackageFile(files, fields[0],
+                    fields[0] + "." + fields[1] + ".shr",
+                    recipient.privateKey(), owner.certificate().getPublicKey());
+            check(Arrays.equals(plaintextByCode.get(fields[0]), sharedPlaintext),
+                    "arquivo compartilhado decriptado e assinatura verificada: " + fields[0]);
+        }
+        testPackageWithVault(files, identities, admin, plaintextByCode);
+    }
+
+    private static void testPackageWithVault(Path files, Map<String, Identity> identities,
+            Identity admin, Map<String, byte[]> plaintextByCode) throws Exception {
+        Path databasePath = Files.createTempFile("t3-package-", ".db");
+        Path outputFolder = Files.createTempDirectory("t3-package-output-");
+        try (Database database = new Database(databasePath)) {
+            char[] pin = "13572468".toCharArray();
+            byte[] totpSecret = new byte[20];
+            new SecureRandom().nextBytes(totpSecret);
+            byte[] encryptedTotp = CryptoUtils.encryptAes(
+                    new Base32().toString(totpSecret).getBytes(StandardCharsets.US_ASCII), pin);
+            for (Identity identity : identities.values()) {
+                int groupId = identity == admin ? Database.ADMIN_GROUP_ID : Database.USER_GROUP_ID;
+                database.insertUser(CryptoUtils.extractName(identity.certificate()), identity.email(),
+                        groupId, java.util.UUID.randomUUID().toString(),
+                        CryptoUtils.generateBcrypt(pin), encryptedTotp, identity.certificatePem(),
+                        Files.readAllBytes(identity.encryptedKeyPath()));
+            }
+            Arrays.fill(pin, '\0');
+            Vault vault = new Vault(database);
+            int opened = 0;
+            for (Identity identity : identities.values()) {
+                Database.User user = database.findUser(identity.email());
+                Vault.Catalog catalog = vault.listFiles(files, user, admin.privateKey(),
+                        admin.certificate());
+                for (Vault.FileEntry entry : catalog.allowedFiles()) {
+                    boolean owner = entry.owner().equalsIgnoreCase(identity.email());
+                    boolean shared = catalog.shares().stream().anyMatch(item ->
+                            item.code().equals(entry.code())
+                                    && item.authorizedUser().equalsIgnoreCase(identity.email()));
+                    if (!owner && !shared) {
+                        continue;
+                    }
+                    Path output = vault.openFile(catalog, entry, user, identity.privateKey(),
+                            outputFolder);
+                    check(Arrays.equals(plaintextByCode.get(entry.code()), Files.readAllBytes(output)),
+                            "listagem e abertura reais: " + entry.code());
+                    Files.delete(output);
+                    opened++;
+                }
+            }
+            check(opened > 0, "cofre original aberto pelo fluxo de produção");
+        } finally {
+            Files.deleteIfExists(outputFolder);
+            Files.deleteIfExists(databasePath);
+        }
+    }
+
+    private static byte[] openPackageFile(Path folder, String code, String envelopeName,
+            PrivateKey recipientKey, PublicKey signerKey) throws Exception {
+        byte[] seed = CryptoUtils.openEnvelope(Files.readAllBytes(folder.resolve(envelopeName)),
+                recipientKey);
+        byte[] plaintext = CryptoUtils.decryptAes(Files.readAllBytes(folder.resolve(code + ".enc")),
+                seed);
+        if (!CryptoUtils.verify(plaintext, Files.readAllBytes(folder.resolve(code + ".asd")),
+                signerKey)) {
+            throw new AssertionError("Assinatura inválida para " + code);
+        }
+        return plaintext;
     }
 
     private static void testDatabaseAndVault(Path raiz, Path pastaVault, Path saida) throws Exception {
