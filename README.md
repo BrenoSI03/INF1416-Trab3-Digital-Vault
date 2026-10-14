@@ -33,12 +33,41 @@ administrador para consultar os registros de auditoria em ordem cronológica.
 O projeto requer Java JDK, SQLite JDBC e BouncyCastle. Os arquivos JAR
 necessários estão na pasta `lib`.
 
-No PowerShell, execute os comandos a partir da raiz do projeto:
+Execute os comandos a partir da raiz do projeto. Caso prefira usar o CMake, é
+necessário ter a versão 3.20 ou mais recente e preparar o diretório de build uma
+vez:
+
+```powershell
+cmake -S . -B cmake-build
+```
+
+### Compilação
+
+Para compilar diretamente pelo PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force build
 javac -encoding UTF-8 -cp "lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" -d build src\*.java tests\Tests.java
+```
+
+Ou, usando CMake:
+
+```powershell
+cmake --build cmake-build
+```
+
+### Execução da aplicação
+
+Para executar diretamente pelo PowerShell:
+
+```powershell
 java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" DigitalVault
+```
+
+Ou, usando CMake:
+
+```powershell
+cmake --build cmake-build --target run
 ```
 
 Sem argumentos, a aplicação utiliza o arquivo `cofre.db` no diretório atual.
@@ -49,53 +78,49 @@ argumento:
 java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" DigitalVault caminho-do-banco.db
 ```
 
-O visualizador de logs deve ser executado em um terminal real, pois lê a frase
-secreta sem exibi-la. O primeiro argumento é o caminho da chave privada do
-administrador e o segundo, opcional, é o caminho do banco de dados:
+O visualizador de logs deve ser aberto em um terminal, pois lê a frase secreta
+sem mostrá-la na tela. Informe o caminho da chave privada do administrador e,
+se necessário, o caminho do banco de dados:
 
 ```powershell
 java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" LogView caminho-da-chave.key
 java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" LogView caminho-da-chave.key caminho-do-banco.db
 ```
 
-### Compilação com CMake
-
-Como alternativa, o projeto possui um `CMakeLists.txt`. É necessário ter o
-CMake 3.20 ou mais recente e o JDK instalados:
-
-```powershell
-cmake -S . -B cmake-build
-cmake --build cmake-build
-```
-
-Depois da compilação, a aplicação e os testes podem ser executados pelos alvos:
-
-```powershell
-cmake --build cmake-build --target run
-cmake --build cmake-build --target run_tests
-cmake --build cmake-build --target run_package_tests
-```
-
-O último alvo solicita as frases do `Pacote-T3` no terminal.
-
 ## Testes
 
-A suíte principal cria identidades, certificados, banco e cofre independentes
-em `tests/additional-data`:
+Os testes principais criam identidades, certificados, banco e cofre independentes
+em `tests/additional-data`.
+
+Para executar o teste diretamente pelo PowerShell:
 
 ```powershell
 java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" Tests
 ```
 
-Essa suíte concluiu 52 verificações envolvendo Base32, TOTP, bcrypt,
+Ou, usando CMake:
+
+```powershell
+cmake --build cmake-build --target run_tests
+```
+
+Esses testes concluíram 52 verificações envolvendo Base32, TOTP, bcrypt,
 PKCS#8, AES, RSA, banco de dados, permissões, compartilhamento, adulterações,
 bloqueio e ordem cronológica dos registros.
 
 O `Pacote-T3` pode ser testado separadamente. As três frases são solicitadas no
-terminal sem serem exibidas:
+terminal sem serem exibidas.
+
+Para executar diretamente pelo PowerShell:
 
 ```powershell
 java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" Tests --package-t3
+```
+
+Ou, usando CMake:
+
+```powershell
+cmake --build cmake-build --target run_package_tests
 ```
 
 Esse teste concluiu 25 verificações com as chaves, certificados, índices,
