@@ -58,6 +58,26 @@ java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar
 java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" LogView caminho-da-chave.key caminho-do-banco.db
 ```
 
+### Compilação com CMake
+
+Como alternativa, o projeto possui um `CMakeLists.txt`. É necessário ter o
+CMake 3.20 ou mais recente e o JDK instalados:
+
+```powershell
+cmake -S . -B cmake-build
+cmake --build cmake-build
+```
+
+Depois da compilação, a aplicação e os testes podem ser executados pelos alvos:
+
+```powershell
+cmake --build cmake-build --target run
+cmake --build cmake-build --target run_tests
+cmake --build cmake-build --target run_package_tests
+```
+
+O último alvo solicita as frases do `Pacote-T3` no terminal.
+
 ## Testes
 
 A suíte principal cria identidades, certificados, banco e cofre independentes

@@ -1,5 +1,6 @@
 # Build and runtime files
 /build/
+/cmake-build*/
 /cofre.db
 
 # Temporary test executions
