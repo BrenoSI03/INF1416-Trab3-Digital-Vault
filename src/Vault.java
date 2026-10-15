@@ -35,17 +35,16 @@ public class Vault {
             PrivateKey privadaAdmin, X509Certificate certificadoAdmin) throws Exception {
         Path pasta;
         try {
+            if (pastaInformada == null || pastaInformada.toString().isBlank()) {
+                throw new Exception();
+            }
             pasta = pastaInformada.toAbsolutePath().normalize();
             if (!Files.isDirectory(pasta, LinkOption.NOFOLLOW_LINKS)) {
                 throw new Exception();
             }
-            for (String nome : List.of("index.enc", "index.env", "index.asd",
-                    "share.enc", "share.env", "share.asd")) {
-                safeFile(pasta, nome);
-            }
         } catch (Exception error) {
             banco.logEvent(7004, usuario.uid(), null);
-            throw new Exception("A pasta segura é inválida ou está incompleta.");
+            throw new Exception("A pasta segura é inválida.");
         }
 
         byte[] index = openMetadata(pasta, "index", privadaAdmin,
@@ -66,8 +65,6 @@ public class Vault {
                 permitidos.add(arquivo);
             }
         }
-        banco.logEvent(7009, usuario.uid(), null);
-        banco.logEvent(7014, usuario.uid(), null);
         return new Catalog(pasta, List.copyOf(permitidos), Map.copyOf(arquivos),
                 List.copyOf(compartilhamentos));
     }
@@ -144,10 +141,18 @@ public class Vault {
         }
         String texto = new String(dados, StandardCharsets.US_ASCII);
         List<String> linhas = new ArrayList<>();
-        for (String linha : texto.split("\\n", -1)) {
-            if (!linha.isEmpty()) {
-                linhas.add(linha);
+        if (texto.isEmpty()) {
+            return linhas;
+        }
+        String[] partes = texto.split("\\n", -1);
+        for (int i = 0; i < partes.length; i++) {
+            if (i == partes.length - 1 && partes[i].isEmpty()) {
+                break;
             }
+            if (partes[i].isEmpty()) {
+                throw new Exception("Linha vazia no índice.");
+            }
+            linhas.add(partes[i]);
         }
         return linhas;
     }
@@ -156,7 +161,14 @@ public class Vault {
             PrivateKey privadaUser, Path destino) throws Exception {
         banco.logEvent(7015, usuario.uid(), selecionado.name());
         FileEntry autentico = catalogo.files().get(selecionado.code());
-        boolean permitido = autentico != null && catalogo.allowedFiles().contains(autentico);
+        ShareEntry compartilhamento = autentico == null ? null : catalogo.shares().stream()
+                .filter(item -> item.code().equals(autentico.code())
+                        && item.authorizedUser().equalsIgnoreCase(usuario.email()))
+                .findFirst().orElse(null);
+        boolean ehDono = autentico != null && autentico.owner().equalsIgnoreCase(usuario.email());
+        boolean permitido = autentico != null && autentico.equals(selecionado)
+                && catalogo.allowedFiles().contains(autentico)
+                && (ehDono || compartilhamento != null);
         if (!permitido) {
             banco.logEvent(7017, usuario.uid(), selecionado.name());
             throw new Exception("Acesso negado ao arquivo selecionado.");
@@ -164,17 +176,9 @@ public class Vault {
         banco.logEvent(7016, usuario.uid(), selecionado.name());
 
         Path envelope;
-        if (autentico.owner().equalsIgnoreCase(usuario.email())) {
+        if (ehDono) {
             envelope = catalogo.folder().resolve(autentico.code() + ".env");
         } else {
-            ShareEntry compartilhamento = catalogo.shares().stream()
-                    .filter(item -> item.code().equals(autentico.code())
-                            && item.authorizedUser().equalsIgnoreCase(usuario.email()))
-                    .findFirst().orElse(null);
-            if (compartilhamento == null) {
-                banco.logEvent(7020, usuario.uid(), autentico.name());
-                throw new Exception("O arquivo é visível pelo grupo, mas não há envelope destinado a este usuário.");
-            }
             envelope = catalogo.folder().resolve(
                     autentico.code() + "." + compartilhamento.id() + ".shr");
         }
@@ -223,7 +227,13 @@ public class Vault {
         if (!saida.getParent().equals(pastaDestino) || Files.exists(saida)) {
             throw new Exception("O arquivo de saída já existe ou possui nome inválido.");
         }
-        Files.write(saida, texto, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        Path temporario = Files.createTempFile(pastaDestino, ".cofre-", ".tmp");
+        try {
+            Files.write(temporario, texto, StandardOpenOption.TRUNCATE_EXISTING);
+            Files.move(temporario, saida);
+        } finally {
+            Files.deleteIfExists(temporario);
+        }
         return saida;
     }
 

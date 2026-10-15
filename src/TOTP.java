@@ -27,7 +27,7 @@ public class TOTP {
         return String.format("%06d", binary % 1_000_000);
     }
 
-    private byte[] hmacSha1(byte[] counter, byte[] keyByteArray) {
+    private byte[] HMAC_SHA1(byte[] counter, byte[] keyByteArray) {
         try {
             Mac mac = Mac.getInstance("HmacSHA1");
             mac.init(new SecretKeySpec(keyByteArray, "HmacSHA1"));
@@ -37,18 +37,18 @@ public class TOTP {
         }
     }
 
-    private String totpCode(long timeInterval) {
+    private String TOTPCode(long timeInterval) {
         byte[] counter = new byte[8];
         for (int i = counter.length - 1; i >= 0; i--) {
             counter[i] = (byte) timeInterval;
             timeInterval >>>= 8;
         }
-        return getTOTPCodeFromHash(hmacSha1(counter, key));
+        return getTOTPCodeFromHash(HMAC_SHA1(counter, key));
     }
 
     public String generateCode() {
         long interval = new Date().getTime() / 1000L / timeStepInSeconds;
-        return totpCode(interval);
+        return TOTPCode(interval);
     }
 
     public boolean validateCode(String inputTOTP) {
@@ -57,7 +57,7 @@ public class TOTP {
         }
         long interval = new Date().getTime() / 1000L / timeStepInSeconds;
         for (long candidate = interval - 1; candidate <= interval + 1; candidate++) {
-            if (inputTOTP.equals(totpCode(candidate))) {
+            if (inputTOTP.equals(TOTPCode(candidate))) {
                 return true;
             }
         }

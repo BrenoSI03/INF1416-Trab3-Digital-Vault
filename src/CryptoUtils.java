@@ -16,7 +16,6 @@ import java.security.cert.X509Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Arrays;
 import java.util.Base64;
-import java.util.Collection;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
@@ -73,24 +72,33 @@ public final class CryptoUtils {
     }
 
     public static PrivateKey loadPrivateKey(Path arquivo, char[] frase) throws Exception {
-        return restorePrivateKey(decryptAes(Files.readAllBytes(arquivo), frase));
+        byte[] conteudo = decryptAes(Files.readAllBytes(arquivo), frase);
+        try {
+            return restorePrivateKey(conteudo);
+        } finally {
+            Arrays.fill(conteudo, (byte) 0);
+        }
     }
 
     public static PrivateKey restorePrivateKey(byte[] conteudoDecriptado) throws Exception {
-        byte[] der;
         String texto = new String(conteudoDecriptado, StandardCharsets.US_ASCII).trim();
-        if (texto.contains("-----BEGIN PRIVATE KEY-----")) {
-            String base64 = texto
-                    .replace("-----BEGIN PRIVATE KEY-----", "")
-                    .replace("-----END PRIVATE KEY-----", "")
-                    .replaceAll("\\s", "");
-            der = Base64.getDecoder().decode(base64);
-        } else if (texto.matches("[A-Za-z0-9+/=\\s]+")) {
-            der = Base64.getMimeDecoder().decode(texto);
-        } else {
+        String inicio = "-----BEGIN PRIVATE KEY-----";
+        String fim = "-----END PRIVATE KEY-----";
+        if (texto.startsWith(inicio) && texto.endsWith(fim)) {
+            texto = texto.substring(inicio.length(), texto.length() - fim.length());
+        } else if (texto.contains("-----")) {
             throw new IllegalArgumentException("Chave privada não contém PKCS#8 em PEM/Base64.");
         }
-        return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(der));
+        String base64 = texto.replaceAll("\\s+", "");
+        if (base64.isEmpty()) {
+            throw new IllegalArgumentException("Chave privada não contém PKCS#8 em PEM/Base64.");
+        }
+        byte[] der = Base64.getDecoder().decode(base64);
+        try {
+            return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(der));
+        } finally {
+            Arrays.fill(der, (byte) 0);
+        }
     }
 
     public static X509Certificate loadCertificate(Path arquivo) throws Exception {
@@ -157,19 +165,7 @@ public final class CryptoUtils {
     }
 
     public static String extractEmail(X509Certificate certificado) throws Exception {
-        String email = subjectAttribute(certificado, "EMAILADDRESS");
-        if (email != null) {
-            return email;
-        }
-        Collection<java.util.List<?>> nomes = certificado.getSubjectAlternativeNames();
-        if (nomes != null) {
-            for (java.util.List<?> nome : nomes) {
-                if (Integer.valueOf(1).equals(nome.get(0))) {
-                    return String.valueOf(nome.get(1));
-                }
-            }
-        }
-        return null;
+        return subjectAttribute(certificado, "EMAILADDRESS");
     }
 
     private static String subjectAttribute(X509Certificate certificado, String tipo) throws Exception {

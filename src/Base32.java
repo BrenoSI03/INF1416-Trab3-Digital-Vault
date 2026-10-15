@@ -28,21 +28,44 @@ public class Base32 {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         int buffer = 0;
         int bits = 0;
+        int symbols = 0;
+        int padding = 0;
         for (int i = 0; i < text.length(); i++) {
             char character = Character.toUpperCase(text.charAt(i));
-            if (Character.isWhitespace(character) || character == '=') {
+            if (Character.isWhitespace(character)) {
                 continue;
+            }
+            if (character == '=') {
+                padding++;
+                continue;
+            }
+            if (padding > 0) {
+                return null;
             }
             int value = ALPHABET.indexOf(character);
             if (value < 0) {
                 return null;
             }
+            symbols++;
             buffer = (buffer << 5) | value;
             bits += 5;
             if (bits >= 8) {
                 output.write((buffer >> (bits - 8)) & 0xff);
                 bits -= 8;
             }
+        }
+        int remainder = symbols % 8;
+        int expectedPadding = switch (remainder) {
+            case 0 -> 0;
+            case 2 -> 6;
+            case 4 -> 4;
+            case 5 -> 3;
+            case 7 -> 1;
+            default -> -1;
+        };
+        if (expectedPadding < 0 || (padding > 0 && padding != expectedPadding)
+                || (bits > 0 && (buffer & ((1 << bits) - 1)) != 0)) {
+            return null;
         }
         return output.toByteArray();
     }

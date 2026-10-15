@@ -78,6 +78,9 @@ argumento:
 java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" DigitalVault caminho-do-banco.db
 ```
 
+O total de acessos aumenta após o login completo, e o total de consultas aumenta
+quando o botão Listar conclui a consulta com sucesso.
+
 O visualizador de logs deve ser aberto em um terminal, pois lê a frase secreta
 sem mostrá-la na tela. Informe o caminho da chave privada do administrador e,
 se necessário, o caminho do banco de dados:
@@ -104,7 +107,7 @@ Ou, usando CMake:
 cmake --build cmake-build --target run_tests
 ```
 
-Esses testes concluíram 52 verificações envolvendo Base32, TOTP, bcrypt,
+Esses testes concluíram 109 verificações envolvendo Base32, TOTP, bcrypt,
 PKCS#8, AES, RSA, banco de dados, permissões, compartilhamento, adulterações,
 bloqueio e ordem cronológica dos registros.
 

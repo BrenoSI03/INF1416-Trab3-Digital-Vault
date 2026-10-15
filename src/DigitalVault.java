@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.security.PrivateKey;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.sql.SQLException;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -31,6 +32,10 @@ import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.DocumentFilter;
 
 public class DigitalVault {
     private final Database banco;
@@ -56,9 +61,9 @@ public class DigitalVault {
     }
 
     public static void main(String[] args) {
-        Path banco = Path.of(args.length == 0 ? "cofre.db" : args[0]);
         SwingUtilities.invokeLater(() -> {
             try {
+                Path banco = Path.of(args.length == 0 ? "cofre.db" : args[0]);
                 new DigitalVault(banco).start();
             } catch (Exception error) {
                 JOptionPane.showMessageDialog(null,
@@ -103,7 +108,13 @@ public class DigitalVault {
             Database.KeyEntry chaveiro = banco.findKeyEntry(administrador.uid());
             PrivateKey privada = restoreKey(chaveiro, frase);
             X509Certificate certificado = CryptoUtils.loadCertificate(chaveiro.certificatePem());
-            if (!CryptoUtils.proveKeyPair(privada, certificado.getPublicKey(), 10_240)) {
+            boolean parValido;
+            try {
+                parValido = CryptoUtils.proveKeyPair(privada, certificado.getPublicKey(), 10_240);
+            } catch (Exception error) {
+                parValido = false;
+            }
+            if (!parValido) {
                 banco.logEvent(6007, administrador.uid(), null);
                 return false;
             }
@@ -209,11 +220,9 @@ public class DigitalVault {
             teclas[i] = new JButton();
             JButton tecla = teclas[i];
             tecla.addActionListener(event -> {
-                if (pares.size() >= 10) {
+                if (!recordPressedPair(pares, tecla.getText())) {
                     return;
                 }
-                String[] valores = tecla.getText().split(" ");
-                pares.add(new char[] {valores[0].charAt(0), valores[1].charAt(0)});
                 quantidade.setText("Senha pessoal: " + pares.size() + " dígitos informados");
                 redistribuir.run();
             });
@@ -268,6 +277,17 @@ public class DigitalVault {
         for (int i = 0; i < 5; i++) {
             teclas[i].setText(digitos.get(i * 2) + " " + digitos.get(i * 2 + 1));
         }
+    }
+
+    static boolean recordPressedPair(List<char[]> pairs, String buttonText) {
+        if (pairs.size() >= 10) {
+            return false;
+        }
+        if (buttonText == null || !buttonText.matches("[0-9] [0-9]")) {
+            throw new IllegalArgumentException("Par de dígitos inválido.");
+        }
+        pairs.add(new char[] {buttonText.charAt(0), buttonText.charAt(2)});
+        return true;
     }
 
     static char[] findPassword(List<char[]> pares, String hash) {
@@ -325,6 +345,7 @@ public class DigitalVault {
         JPanel painel = createBasePanel("Autenticação — etapa 3");
         JPanel centro = new JPanel(new GridLayout(0, 1, 8, 8));
         JTextField token = new JTextField(6);
+        limitField(token, 6);
         centro.add(new JLabel("TOTP de 6 dígitos:"));
         centro.add(token);
         JPanel botoes = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -336,10 +357,8 @@ public class DigitalVault {
         painel.add(centro, BorderLayout.CENTER);
         confirmar.addActionListener(event -> {
             try {
-                byte[] base32Bytes = CryptoUtils.decryptAes(
-                        usuarioAtual.encryptedTotpSecret(), senhaComprovada);
-                TOTP totp = new TOTP(new String(base32Bytes, StandardCharsets.US_ASCII), 30);
-                if (!totp.validateCode(token.getText().trim())) {
+                if (!verifyToken(usuarioAtual.encryptedTotpSecret(), senhaComprovada,
+                        token.getText().trim())) {
                     handleTokenFailure();
                     return;
                 }
@@ -357,6 +376,20 @@ public class DigitalVault {
         });
         limpar.addActionListener(event -> token.setText(""));
         showPanel(painel);
+    }
+
+    static boolean verifyToken(byte[] encryptedSecret, char[] verifiedPassword,
+            String code) throws Exception {
+        if (verifiedPassword == null) {
+            return false;
+        }
+        byte[] base32Bytes = CryptoUtils.decryptAes(encryptedSecret, verifiedPassword);
+        try {
+            TOTP totp = new TOTP(new String(base32Bytes, StandardCharsets.US_ASCII), 30);
+            return totp.validateCode(code);
+        } finally {
+            java.util.Arrays.fill(base32Bytes, (byte) 0);
+        }
     }
 
     private void handleTokenFailure() throws Exception {
@@ -443,6 +476,11 @@ public class DigitalVault {
         grupo.setEnabled(!inicial);
         JPasswordField senha = new JPasswordField(10);
         JPasswordField confirmacao = new JPasswordField(10);
+        limitField(certificado, 255);
+        limitField(chave, 255);
+        limitField(frase, 255);
+        limitField(senha, 10);
+        limitField(confirmacao, 10);
         formulario.add(new JLabel("Total de usuários do sistema:"));
         try {
             formulario.add(new JLabel(String.valueOf(banco.countUsers())));
@@ -502,13 +540,24 @@ public class DigitalVault {
                 }
                 PrivateKey privada;
                 try {
-                    privada = CryptoUtils.restorePrivateKey(
-                            CryptoUtils.decryptAes(chaveCifrada, fraseInformada));
+                    byte[] chaveAberta = CryptoUtils.decryptAes(chaveCifrada, fraseInformada);
+                    try {
+                        privada = CryptoUtils.restorePrivateKey(chaveAberta);
+                    } finally {
+                        java.util.Arrays.fill(chaveAberta, (byte) 0);
+                    }
                 } catch (Exception error) {
                     banco.logEvent(6006, inicial ? null : usuarioAtual.uid(), null);
                     throw new Exception("Frase secreta inválida.");
                 }
-                if (!CryptoUtils.proveKeyPair(privada, certificadoLido.getPublicKey(), 10_240)) {
+                boolean parValido;
+                try {
+                    parValido = CryptoUtils.proveKeyPair(
+                            privada, certificadoLido.getPublicKey(), 10_240);
+                } catch (Exception error) {
+                    parValido = false;
+                }
+                if (!parValido) {
                     banco.logEvent(6007, inicial ? null : usuarioAtual.uid(), null);
                     throw new Exception("A chave privada não corresponde ao certificado.");
                 }
@@ -590,8 +639,11 @@ public class DigitalVault {
         JPanel topo = new JPanel(new GridLayout(0, 2, 7, 7));
         JTextField pasta = new JTextField(35);
         JPasswordField frase = new JPasswordField(35);
+        limitField(pasta, 255);
+        limitField(frase, 255);
         topo.add(new JLabel("Total de consultas do usuário:"));
-        topo.add(new JLabel(String.valueOf(usuarioAtual.queryCount())));
+        JLabel totalConsultas = new JLabel(String.valueOf(usuarioAtual.queryCount()));
+        topo.add(totalConsultas);
         addField(topo, "Caminho da pasta:", pasta);
         addField(topo, "Frase secreta:", frase);
         JButton listar = new JButton("Listar");
@@ -616,16 +668,14 @@ public class DigitalVault {
             char[] fraseInformada = frase.getPassword();
             try {
                 banco.logEvent(7003, usuarioAtual.uid(), null);
+                catalogoAtual[0] = null;
+                privadaAtual[0] = null;
+                modelo.setRowCount(0);
                 if (pasta.getText().length() > 255 || fraseInformada.length > 255) {
                     throw new Exception("Caminho ou frase excede 255 caracteres.");
                 }
                 Database.KeyEntry chaveUser = banco.findKeyEntry(usuarioAtual.uid());
-                PrivateKey privadaUser = restoreKey(chaveUser, fraseInformada);
-                X509Certificate certificadoUser = CryptoUtils.loadCertificate(
-                        chaveUser.certificatePem());
-                if (!CryptoUtils.proveKeyPair(privadaUser, certificadoUser.getPublicKey(), 10_240)) {
-                    throw new Exception("A chave privada não corresponde ao certificado.");
-                }
+                PrivateKey privadaUser = verifyStoredKey(chaveUser, fraseInformada);
                 Database.User admin = banco.findAdministrator();
                 Database.KeyEntry chaveAdmin = banco.findKeyEntry(admin.uid());
                 PrivateKey privadaAdmin = restoreKey(chaveAdmin, fraseAdministrador);
@@ -637,10 +687,13 @@ public class DigitalVault {
                 for (Vault.FileEntry arquivo : catalogo.allowedFiles()) {
                     modelo.addRow(new Object[] {arquivo.name(), arquivo.owner(), arquivo.group()});
                 }
+                banco.logEvent(7009, usuarioAtual.uid(), null);
+                banco.logEvent(7014, usuarioAtual.uid(), null);
                 catalogoAtual[0] = catalogo;
                 privadaAtual[0] = privadaUser;
                 banco.incrementQueryCount(usuarioAtual.uid());
                 usuarioAtual = banco.findUser(usuarioAtual.uid());
+                totalConsultas.setText(String.valueOf(usuarioAtual.queryCount()));
                 frase.setText("");
             } catch (Exception error) {
                 showMessage(message(error));
@@ -752,12 +805,26 @@ public class DigitalVault {
         }
     }
 
-    private PrivateKey restoreKey(Database.KeyEntry chaveiro, char[] frase) throws Exception {
+    static PrivateKey verifyStoredKey(Database.KeyEntry keyEntry, char[] passphrase)
+            throws Exception {
+        PrivateKey privateKey = restoreKey(keyEntry, passphrase);
+        X509Certificate certificate = CryptoUtils.loadCertificate(keyEntry.certificatePem());
+        if (!CryptoUtils.proveKeyPair(privateKey, certificate.getPublicKey(), 10_240)) {
+            throw new Exception("A chave privada não corresponde ao certificado.");
+        }
+        return privateKey;
+    }
+
+    private static PrivateKey restoreKey(Database.KeyEntry chaveiro, char[] frase) throws Exception {
         if (chaveiro == null) {
             throw new Exception("Chave do usuário não encontrada.");
         }
-        return CryptoUtils.restorePrivateKey(
-                CryptoUtils.decryptAes(chaveiro.encryptedPrivateKey(), frase));
+        byte[] conteudo = CryptoUtils.decryptAes(chaveiro.encryptedPrivateKey(), frase);
+        try {
+            return CryptoUtils.restorePrivateKey(conteudo);
+        } finally {
+            java.util.Arrays.fill(conteudo, (byte) 0);
+        }
     }
 
     private void clearVerifiedPassword() {
@@ -768,6 +835,26 @@ public class DigitalVault {
     private static void addField(JPanel painel, String rotulo, java.awt.Component campo) {
         painel.add(new JLabel(rotulo));
         painel.add(campo);
+    }
+
+    private static void limitField(JTextField campo, int limite) {
+        ((AbstractDocument) campo.getDocument()).setDocumentFilter(new DocumentFilter() {
+            @Override
+            public void insertString(FilterBypass bypass, int offset, String texto, AttributeSet atributos)
+                    throws BadLocationException {
+                if (texto != null && bypass.getDocument().getLength() + texto.length() <= limite) {
+                    super.insertString(bypass, offset, texto, atributos);
+                }
+            }
+
+            @Override
+            public void replace(FilterBypass bypass, int offset, int tamanho, String texto,
+                    AttributeSet atributos) throws BadLocationException {
+                if (texto != null && bypass.getDocument().getLength() - tamanho + texto.length() <= limite) {
+                    super.replace(bypass, offset, tamanho, texto, atributos);
+                }
+            }
+        });
     }
 
     private static void clearFields(JTextField certificado, JTextField chave,
@@ -807,6 +894,9 @@ public class DigitalVault {
     }
 
     private static String message(Throwable error) {
+        if (error instanceof SQLException) {
+            return "Falha ao acessar o banco de dados.";
+        }
         String texto = error.getMessage();
         return texto == null || texto.isBlank() ? "Operação não concluída." : texto;
     }

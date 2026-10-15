@@ -41,6 +41,7 @@ public class Tests {
         testBase32AndTotp();
         testBasicCryptography();
         testVirtualKeyboard();
+        testFieldLimits();
         testOriginalPackageStructure();
         testDatabaseAndVault(raiz, pastaVault, saida);
         System.out.println("OK - " + verificacoes + " verificações executadas.");
@@ -53,18 +54,29 @@ public class Tests {
         check("MZXW6YTBOI".equals(codificado), "Base32 RFC 4648");
         check("foobar".equals(new String(base32.fromString(codificado), StandardCharsets.US_ASCII)),
                 "decodificação Base32");
+        check(base32.fromString("MZ======") == null
+                && base32.fromString("MY===A==") == null,
+                "Base32 com bits ou padding inválidos recusado");
         byte[] segredo = new byte[20];
         new SecureRandom().nextBytes(segredo);
         TOTP totp = new TOTP(base32.toString(segredo), 30);
         check(totp.validateCode(totp.generateCode()), "TOTP atual");
-        var metodo = TOTP.class.getDeclaredMethod("totpCode", long.class);
+        var metodo = TOTP.class.getDeclaredMethod("TOTPCode", long.class);
         metodo.setAccessible(true);
+        TOTP exemploRfc = new TOTP(base32.toString(
+                "12345678901234567890".getBytes(StandardCharsets.US_ASCII)), 30);
+        check("287082".equals(metodo.invoke(exemploRfc, 1L)),
+                "TOTP corresponde ao vetor RFC 6238 de 59 segundos");
         long intervalo = System.currentTimeMillis() / 1000L / 30L;
         check(totp.validateCode((String) metodo.invoke(totp, intervalo - 1)), "TOTP de T-1");
         check(totp.validateCode((String) metodo.invoke(totp, intervalo + 1)), "TOTP de T+1");
         check(!totp.validateCode((String) metodo.invoke(totp, intervalo - 2)),
                 "TOTP fora da janela recusado");
         check(!totp.validateCode("abc123") && !totp.validateCode("00000"), "TOTP inválido");
+        var truncamento = TOTP.class.getDeclaredMethod("getTOTPCodeFromHash", byte[].class);
+        truncamento.setAccessible(true);
+        check("000000".equals(truncamento.invoke(totp, (Object) new byte[20])),
+                "TOTP preserva zeros à esquerda");
     }
 
     private static void testBasicCryptography() throws Exception {
@@ -93,9 +105,27 @@ public class Tests {
                         par.getPrivate())), "envelope RSA PKCS1");
         check(CryptoUtils.proveKeyPair(par.getPrivate(), par.getPublic(), 2_048),
                 "prova RSA de 2048 bytes do logView");
+        check(CryptoUtils.proveKeyPair(par.getPrivate(), par.getPublic(), 10_240),
+                "prova RSA de 10240 bytes do cadastro");
+        var outroPar = CryptoUtils.generateRsaKeyPair();
+        check(!CryptoUtils.proveKeyPair(par.getPrivate(), outroPar.getPublic(), 10_240),
+                "par RSA incorreto recusado no cadastro");
+        String base64 = Base64.getMimeEncoder(64, new byte[] {'\n'})
+                .encodeToString(par.getPrivate().getEncoded());
+        check(Arrays.equals(par.getPrivate().getEncoded(),
+                CryptoUtils.restorePrivateKey(base64.getBytes(StandardCharsets.US_ASCII)).getEncoded()),
+                "PKCS#8 Base64 com várias linhas");
+        boolean pemIncompletoRecusado = false;
+        try {
+            CryptoUtils.restorePrivateKey(("-----BEGIN PRIVATE KEY-----\n" + base64)
+                    .getBytes(StandardCharsets.US_ASCII));
+        } catch (Exception expected) {
+            pemIncompletoRecusado = true;
+        }
+        check(pemIncompletoRecusado, "PEM sem rodapé recusado");
     }
 
-    private static void testVirtualKeyboard() {
+    private static void testVirtualKeyboard() throws Exception {
         check(DigitalVault.isPasswordValid("13572468".toCharArray()), "PIN válido");
         check(!DigitalVault.isPasswordValid("11234567".toCharArray()), "PIN repetido recusado");
         check(!DigitalVault.isPasswordValid("1234567".toCharArray()), "PIN curto recusado");
@@ -108,19 +138,100 @@ public class Tests {
         }
         check(java.util.Arrays.equals(pin, DigitalVault.findPassword(pares, hash)),
                 "árvore de candidatas do teclado");
+        List<char[]> ultimaCombinacao = new ArrayList<>();
+        for (char digito : pin) {
+            ultimaCombinacao.add(new char[] {
+                    digito == '0' ? '1' : '0', digito
+            });
+        }
+        check(Arrays.equals(pin, DigitalVault.findPassword(ultimaCombinacao, hash)),
+                "árvore alcança a última das 2^L combinações");
+        checkCandidate("13572468");
         checkCandidate("135724689");
         checkCandidate("1357246890");
+        javax.swing.JButton[] teclas = new javax.swing.JButton[5];
+        for (int i = 0; i < teclas.length; i++) {
+            teclas[i] = new javax.swing.JButton();
+        }
+        for (int rodada = 0; rodada < 10; rodada++) {
+            DigitalVault.distributeDigits(teclas);
+            boolean[] vistos = new boolean[10];
+            boolean semRepeticao = true;
+            for (javax.swing.JButton tecla : teclas) {
+                for (String valor : tecla.getText().split(" ")) {
+                    int digito = Integer.parseInt(valor);
+                    semRepeticao &= !vistos[digito];
+                    vistos[digito] = true;
+                }
+            }
+            boolean completo = true;
+            for (boolean visto : vistos) {
+                completo &= visto;
+            }
+            check(semRepeticao && completo, "teclado contém 0..9 uma vez na distribuição " + rodada);
+        }
+
+        List<char[]> cliques = new ArrayList<>();
+        DigitalVault.distributeDigits(teclas);
+        String parPressionado = teclas[0].getText();
+        check(DigitalVault.recordPressedPair(cliques, parPressionado),
+                "clique registra o par apresentado");
+        char[] parRegistrado = cliques.get(0).clone();
+        DigitalVault.distributeDigits(teclas);
+        check(Arrays.equals(parRegistrado, cliques.get(0)),
+                "redistribuição não altera o par já pressionado");
+        for (int i = 1; i < 10; i++) {
+            DigitalVault.recordPressedPair(cliques, teclas[i % teclas.length].getText());
+            DigitalVault.distributeDigits(teclas);
+        }
+        check(cliques.size() == 10
+                && !DigitalVault.recordPressedPair(cliques, teclas[0].getText()),
+                "teclado limita a senha a 10 cliques");
+        cliques.clear();
+        check(cliques.isEmpty() && DigitalVault.findPassword(cliques, hash) == null,
+                "Limpar remove os pares e OK recusa tamanho inválido");
+
+        byte[] segredo = new byte[20];
+        new SecureRandom().nextBytes(segredo);
+        String segredoBase32 = new Base32().toString(segredo);
+        byte[] segredoCifrado = CryptoUtils.encryptAes(
+                segredoBase32.getBytes(StandardCharsets.US_ASCII), pin);
+        String codigoAtual = new TOTP(segredoBase32, 30).generateCode();
+        check(!DigitalVault.verifyToken(segredoCifrado, null, codigoAtual),
+                "identificação sem PIN não contorna o segundo fator");
+        check(DigitalVault.verifyToken(segredoCifrado, pin, codigoAtual),
+                "PIN comprovado permite validar o TOTP");
+        check(!DigitalVault.verifyToken(segredoCifrado, pin, "00000"),
+                "PIN correto sem TOTP válido não autentica");
     }
 
-    private static void checkCandidate(String senha) {
+    private static void checkCandidate(String senha) throws Exception {
         char[] pin = senha.toCharArray();
         String hash = CryptoUtils.generateBcrypt(pin);
         List<char[]> pares = new ArrayList<>();
         for (char digito : pin) {
             pares.add(new char[] {digito, digito == '9' ? '0' : (char) (digito + 1)});
         }
-        check(java.util.Arrays.equals(pin, DigitalVault.findPassword(pares, hash)),
+        char[] comprovada = DigitalVault.findPassword(pares, hash);
+        check(java.util.Arrays.equals(pin, comprovada),
                 "teclado virtual com PIN de " + pin.length + " dígitos");
+        byte[] segredo = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP".getBytes(StandardCharsets.US_ASCII);
+        byte[] cifra = CryptoUtils.encryptAes(segredo, pin);
+        check(Arrays.equals(segredo, CryptoUtils.decryptAes(cifra, comprovada)),
+                "PIN comprovado recupera o segredo TOTP de " + pin.length + " dígitos");
+        CryptoUtils.clear(comprovada);
+    }
+
+    private static void testFieldLimits() throws Exception {
+        var metodo = DigitalVault.class.getDeclaredMethod(
+                "limitField", javax.swing.JTextField.class, int.class);
+        metodo.setAccessible(true);
+        javax.swing.JTextField campo = new javax.swing.JTextField();
+        metodo.invoke(null, campo, 10);
+        campo.setText("1234567890");
+        check("1234567890".equals(campo.getText()), "campo aceita o limite exato");
+        campo.setText("12345678901");
+        check("1234567890".equals(campo.getText()), "campo recusa texto acima do limite");
     }
 
     private static void testOriginalPackageStructure() throws Exception {
@@ -304,8 +415,36 @@ public class Tests {
             check(banco.countUsers() == 3 && banco.findAdministrator().uid() == adminUid,
                     "cadastro transacional e administrador");
 
+            Database.KeyEntry chaveDestinatario = banco.findKeyEntry(recipientUid);
+            PrivateKey chaveComprovada = DigitalVault.verifyStoredKey(chaveDestinatario,
+                    "frase-recipient-teste".toCharArray());
+            check(CryptoUtils.proveKeyPair(chaveComprovada,
+                    recipient.certificate().getPublicKey(), 10_240),
+                    "Listar comprova novamente a chave do usuário corrente");
+            boolean fraseErradaRecusada = false;
+            try {
+                DigitalVault.verifyStoredKey(chaveDestinatario,
+                        "frase-incorreta".toCharArray());
+            } catch (Exception expected) {
+                fraseErradaRecusada = true;
+            }
+            check(fraseErradaRecusada, "Listar recusa frase incorreta do usuário");
+            boolean fraseAdminRecusada = false;
+            try {
+                DigitalVault.verifyStoredKey(chaveDestinatario,
+                        "frase-admin-teste".toCharArray());
+            } catch (Exception expected) {
+                fraseAdminRecusada = true;
+            }
+            check(fraseAdminRecusada,
+                    "frase retida do administrador não substitui a prova do usuário");
+
             createVault(pastaVault, admin, owner, recipient);
+            banco.incrementAccessCount(recipientUid);
+            banco.incrementQueryCount(recipientUid);
             Database.User usuario = banco.findUser(recipientUid);
+            check(usuario.accessCount() == 1 && usuario.queryCount() == 1,
+                    "totais de acesso e consulta persistidos por usuário");
             Vault cofre = new Vault(banco);
             Vault.Catalog catalogo = cofre.listFiles(pastaVault, usuario,
                     admin.privateKey(), admin.certificate());
@@ -322,9 +461,34 @@ public class Tests {
             try {
                 cofre.openFile(catalogo, somenteGrupo, usuario, recipient.privateKey(), saida);
             } catch (Exception expected) {
-                grupoFalhouSeguro = !Files.exists(saida.resolve(somenteGrupo.name()));
+                List<Database.LogEntry> logs = banco.listLogs();
+                grupoFalhouSeguro = !Files.exists(saida.resolve(somenteGrupo.name()))
+                        && logs.get(logs.size() - 1).eventCode() == 7017;
             }
-            check(grupoFalhouSeguro, "grupo sem envelope falha sem saída");
+            check(grupoFalhouSeguro, "grupo sem share recebe acesso negado e não gera saída");
+
+            boolean sobrescritaRecusada = false;
+            try {
+                cofre.openFile(catalogo, compartilhado, usuario, recipient.privateKey(), saida);
+            } catch (Exception expected) {
+                sobrescritaRecusada = "arquivo compartilhado independente".equals(
+                        Files.readString(aberto));
+            }
+            check(sobrescritaRecusada, "arquivo de saída existente não é sobrescrito");
+            check(!hasTemporaryOutput(saida),
+                    "recusa de sobrescrita não deixa arquivo parcial");
+
+            Path destinoInvalido = raiz.resolve("destination-is-a-file");
+            Files.writeString(destinoInvalido, "manter");
+            boolean destinoInvalidoRecusado = false;
+            try {
+                cofre.openFile(catalogo, compartilhado, usuario, recipient.privateKey(),
+                        destinoInvalido);
+            } catch (Exception expected) {
+                destinoInvalidoRecusado = "manter".equals(Files.readString(destinoInvalido));
+            }
+            check(destinoInvalidoRecusado,
+                    "destino que não é diretório é recusado sem alteração");
 
             Path saidaOwner = raiz.resolve("owner-output");
             Files.createDirectories(saidaOwner);
@@ -347,6 +511,15 @@ public class Tests {
                 negouSemPermissao = true;
             }
             check(negouSemPermissao, "arquivo sem dono, grupo ou share negado");
+
+            boolean selecaoAlteradaRecusada = false;
+            try {
+                cofre.openFile(catalogo, new Vault.FileEntry("TST900", "outro.txt",
+                        owner.email(), "OutroGrupo"), usuario, recipient.privateKey(), saida);
+            } catch (Exception expected) {
+                selecaoAlteradaRecusada = true;
+            }
+            check(selecaoAlteradaRecusada, "seleção alterada após listagem recusada");
 
             testCorruption(pastaVault.resolve("index.env"), () ->
                     cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
@@ -384,6 +557,8 @@ public class Tests {
                     "assinatura de documento adulterada recusada");
             check(!Files.exists(saidaErros.resolve("shared.txt")),
                     "adulteração não produz texto plano");
+            check(!hasTemporaryOutput(saidaErros),
+                    "erro de integridade não deixa arquivo temporário");
 
             byte[] assinaturaOriginal = Files.readAllBytes(pastaVault.resolve("TST900.asd"));
             Files.write(pastaVault.resolve("TST900.asd"), CryptoUtils.sign(
@@ -407,11 +582,30 @@ public class Tests {
                 cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate());
                 ausenteRecusado = false;
             } catch (Exception expected) {
-                ausenteRecusado = true;
+                List<Database.LogEntry> logs = banco.listLogs();
+                ausenteRecusado = logs.get(logs.size() - 1).eventCode() == 7013;
             } finally {
                 Files.move(shareReserva, shareAssinatura);
             }
-            check(ausenteRecusado, "componente obrigatório ausente recusado");
+            check(ausenteRecusado, "assinatura share ausente registra MID 7013");
+
+            boolean pastaAusenteRecusada = false;
+            try {
+                cofre.listFiles(raiz.resolve("pasta-inexistente"), usuario,
+                        admin.privateKey(), admin.certificate());
+            } catch (Exception expected) {
+                List<Database.LogEntry> logs = banco.listLogs();
+                pastaAusenteRecusada = logs.get(logs.size() - 1).eventCode() == 7004;
+            }
+            check(pastaAusenteRecusada, "pasta ausente registra MID 7004");
+            boolean pastaVaziaRecusada = false;
+            try {
+                cofre.listFiles(Path.of(""), usuario, admin.privateKey(), admin.certificate());
+            } catch (Exception expected) {
+                List<Database.LogEntry> logs = banco.listLogs();
+                pastaVaziaRecusada = logs.get(logs.size() - 1).eventCode() == 7004;
+            }
+            check(pastaVaziaRecusada, "caminho vazio registra MID 7004");
 
             writeProtectedFile(pastaVault, "index",
                     "LINHA campos-insuficientes\n".getBytes(StandardCharsets.US_ASCII),
@@ -433,6 +627,56 @@ public class Tests {
                     .allowedFiles().isEmpty(), "index e share vazios aceitos");
             createVault(pastaVault, admin, owner, recipient);
 
+            testMetadata(pastaVault, "index", "TST900 shared.txt owner@teste.local OutroGrupo\n\n"
+                    .getBytes(StandardCharsets.US_ASCII), admin, () ->
+                    cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
+                    false, "linha vazia interna no index recusada");
+            testMetadata(pastaVault, "index", "TST900 a.doc owner@teste.local OutroGrupo\n"
+                    .concat("TST900 b.doc owner@teste.local OutroGrupo\n")
+                    .getBytes(StandardCharsets.US_ASCII), admin, () ->
+                    cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
+                    false, "código duplicado no index recusado");
+            testMetadata(pastaVault, "index", "TST900 ../fora.txt owner@teste.local OutroGrupo\n"
+                    .getBytes(StandardCharsets.US_ASCII), admin, () ->
+                    cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
+                    false, "nome com travessia de diretório recusado");
+            testMetadata(pastaVault, "share", "TST900 0 recipient@teste.local\n"
+                    .getBytes(StandardCharsets.US_ASCII), admin, () ->
+                    cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
+                    false, "ID de share não positivo recusado");
+            testMetadata(pastaVault, "share", "INEXISTENTE 2 recipient@teste.local\n"
+                    .getBytes(StandardCharsets.US_ASCII), admin, () ->
+                    cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
+                    false, "share sem referência no index recusado");
+            testMetadata(pastaVault, "share", ("TST900 2 recipient@teste.local\n"
+                    + "TST900 2 owner@teste.local\n").getBytes(StandardCharsets.US_ASCII),
+                    admin, () -> cofre.listFiles(pastaVault, usuario,
+                            admin.privateKey(), admin.certificate()),
+                    false, "ID de share duplicado recusado");
+            testMetadata(pastaVault, "index", ("TST900   shared.txt  owner@teste.local OutroGrupo\n"
+                    + "GRP701 group-only.txt owner@teste.local Usuario\n")
+                    .getBytes(StandardCharsets.US_ASCII), admin, () -> {
+                        Vault.Catalog comEspacos = cofre.listFiles(pastaVault, usuario,
+                                admin.privateKey(), admin.certificate());
+                        check(comEspacos.allowedFiles().size() == 2,
+                                "index com espaços e múltiplas linhas produz catálogo");
+                    }, true, "index com espaços é aceito");
+            Path envelopeDois = pastaVault.resolve("TST900.2.shr");
+            Files.copy(pastaVault.resolve("TST900.7.shr"), envelopeDois);
+            try {
+                testMetadata(pastaVault, "share", "TST900 2 recipient@teste.local\n"
+                        .getBytes(StandardCharsets.US_ASCII), admin, () -> {
+                            Vault.Catalog segundoShare = cofre.listFiles(pastaVault, usuario,
+                                    admin.privateKey(), admin.certificate());
+                            Path arquivo = cofre.openFile(segundoShare, compartilhado, usuario,
+                                    recipient.privateKey(), raiz.resolve("share-2-output"));
+                            check("arquivo compartilhado independente".equals(Files.readString(arquivo)),
+                                    "share com ID 2 abre arquivo");
+                        }, true, "share com ID 2 é aceito");
+            } finally {
+                Files.deleteIfExists(envelopeDois);
+            }
+
             check(banco.recordPasswordFailure(recipientUid) == 1
                     && banco.recordPasswordFailure(recipientUid) == 2
                     && banco.recordPasswordFailure(recipientUid) == 3
@@ -441,6 +685,20 @@ public class Tests {
             long bloqueio = banco.findUser(recipientUid).lockedUntil()
                     - System.currentTimeMillis();
             check(bloqueio > 115_000L && bloqueio <= 120_000L, "bloqueio de 120 segundos");
+            try (Database reaberto = new Database(databaseFile)) {
+                check(reaberto.findUser(recipientUid).lockedUntil() == banco.findUser(recipientUid).lockedUntil(),
+                        "bloqueio persiste após reabrir o banco");
+            }
+            try (var conexao = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+                    var statement = conexao.prepareStatement(
+                            "UPDATE Usuarios SET bloqueado_ate=? WHERE uid=?")) {
+                statement.setLong(1, System.currentTimeMillis() - 1);
+                statement.setLong(2, recipientUid);
+                statement.executeUpdate();
+            }
+            banco.clearExpiredLock(recipientUid);
+            check(banco.findUser(recipientUid).lockedUntil() == 0,
+                    "bloqueio vencido é liberado");
             boolean duplicadoRecusado = false;
             try {
                 insertTestUser(banco, recipient, Database.USER_GROUP_ID,
@@ -449,8 +707,33 @@ public class Tests {
                 duplicadoRecusado = banco.countUsers() == 3;
             }
             check(duplicadoRecusado, "e-mail duplicado não cria cadastro parcial");
+            boolean grupoInvalidoRecusado = false;
+            try {
+                banco.insertUser("Teste", "novo@teste.local", 999,
+                        java.util.UUID.randomUUID().toString(), usuario.passwordHash(),
+                        usuario.encryptedTotpSecret(), recipient.certificatePem(),
+                        Files.readAllBytes(recipient.encryptedKeyPath()));
+            } catch (Exception expected) {
+                grupoInvalidoRecusado = banco.countUsers() == 3;
+            }
+            check(grupoInvalidoRecusado, "grupo inválido desfaz cadastro por transação");
+            long ownerUid = banco.findUser(owner.email()).uid();
+            check(banco.recordTokenFailure(ownerUid) == 1
+                    && banco.recordTokenFailure(ownerUid) == 2
+                    && banco.recordTokenFailure(ownerUid) == 3
+                    && banco.findUser(ownerUid).lockedUntil() > System.currentTimeMillis()
+                    && banco.findUser(recipientUid).lockedUntil() == 0,
+                    "três erros de token bloqueiam só a conta correspondente");
+            banco.logEvent(7015, recipientUid, "shared.txt");
+            List<Database.LogEntry> logs = banco.listLogs();
+            Database.LogEntry ultimo = logs.get(logs.size() - 1);
+            check(ultimo.eventCode() == 7015 && "shared.txt".equals(ultimo.fileName())
+                    && recipient.email().equals(ultimo.login())
+                    && ultimo.message().contains("<arq_name>"),
+                    "registro guarda MID, usuário e arquivo; texto vem de Mensagens");
             banco.logEvent(1001, null, null);
             banco.logEvent(1002, null, null);
+            banco.logEvent(1006, null, null);
         }
 
         try (var conexao = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
@@ -462,11 +745,16 @@ public class Tests {
             statement.setLong(1, 1_000L);
             statement.setInt(2, 1002);
             statement.executeUpdate();
+            statement.setLong(1, 1_000L);
+            statement.setInt(2, 1006);
+            statement.executeUpdate();
         }
         try (Database banco = new Database(databaseFile)) {
             List<Database.LogEntry> registros = banco.listLogs();
-            check(registros.get(0).eventCode() == 1002 && registros.get(1).eventCode() == 1001,
-                    "logs ordenados por data e RID");
+            check(registros.get(0).eventCode() == 1002
+                    && registros.get(1).eventCode() == 1006
+                    && registros.get(2).eventCode() == 1001,
+                    "logs ordenados por data e RID em caso de empate");
         }
     }
 
@@ -495,6 +783,32 @@ public class Tests {
             Files.write(arquivo, original);
         }
         check(recusou, descricao);
+    }
+
+    private static void testMetadata(Path pasta, String nome, byte[] texto,
+            Identity admin, Operation operacao, boolean deveAceitar, String descricao)
+            throws Exception {
+        Path cifra = pasta.resolve(nome + ".enc");
+        Path envelope = pasta.resolve(nome + ".env");
+        Path assinatura = pasta.resolve(nome + ".asd");
+        byte[] cifraOriginal = Files.readAllBytes(cifra);
+        byte[] envelopeOriginal = Files.readAllBytes(envelope);
+        byte[] assinaturaOriginal = Files.readAllBytes(assinatura);
+        boolean aceitou;
+        try {
+            writeProtectedFile(pasta, nome, texto, admin.privateKey(), admin.certificate());
+            try {
+                operacao.run();
+                aceitou = true;
+            } catch (Exception expected) {
+                aceitou = false;
+            }
+        } finally {
+            Files.write(cifra, cifraOriginal);
+            Files.write(envelope, envelopeOriginal);
+            Files.write(assinatura, assinaturaOriginal);
+        }
+        check(aceitou == deveAceitar, descricao);
     }
 
     private static long insertTestUser(Database banco, Identity identidade, int grupo,
@@ -553,10 +867,6 @@ public class Tests {
     private static void createVault(Path pasta, Identity admin, Identity owner,
             Identity recipient) throws Exception {
         byte[] index = ("TST900 shared.txt owner@teste.local OutroGrupo\n"
-                + "GRP701 group-only.txt owner@teste.local Usuário\n")
-                .getBytes(StandardCharsets.UTF_8);
-        // Os metadados normativos são ASCII; o grupo de teste usa a forma sem acento.
-        index = ("TST900 shared.txt owner@teste.local OutroGrupo\n"
                 + "GRP701 group-only.txt owner@teste.local Usuario\n")
                 .getBytes(StandardCharsets.US_ASCII);
         byte[] share = "TST900 7 recipient@teste.local\n".getBytes(StandardCharsets.US_ASCII);
@@ -596,6 +906,12 @@ public class Tests {
         }
         Files.deleteIfExists(saida.resolve("shared.txt"));
         Files.deleteIfExists(saida.resolve("group-only.txt"));
+    }
+
+    private static boolean hasTemporaryOutput(Path folder) throws Exception {
+        try (var files = Files.list(folder)) {
+            return files.anyMatch(path -> path.getFileName().toString().startsWith(".cofre-"));
+        }
     }
 
     private static void check(boolean condicao, String descricao) {
