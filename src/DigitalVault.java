@@ -959,9 +959,14 @@ public class DigitalVault {
         JOptionPane.showMessageDialog(janela, message(error), "Erro", JOptionPane.ERROR_MESSAGE);
     }
 
-    private static String message(Throwable error) {
+    static String message(Throwable error) {
         if (error instanceof SQLException) {
             return "Falha ao acessar o banco de dados.";
+        }
+        if (error instanceof java.nio.file.FileSystemException
+                || error instanceof java.nio.file.InvalidPathException
+                || error instanceof SecurityException) {
+            return "Falha ao acessar arquivo ou diretório.";
         }
         String texto = error.getMessage();
         return texto == null || texto.isBlank() ? "Operação não concluída." : texto;

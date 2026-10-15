@@ -296,12 +296,16 @@ public class Database implements AutoCloseable {
     }
 
     public int recordPasswordFailure(long uid) throws SQLException {
+        return recordPasswordFailure(uid, System.currentTimeMillis());
+    }
+
+    int recordPasswordFailure(long uid, long currentTimeMillis) throws SQLException {
         int erros = findUser(uid).passwordFailures() + 1;
         boolean bloquear = erros >= 3;
         try (PreparedStatement statement = conexao.prepareStatement(
                 "UPDATE Usuarios SET erros_senha=?, bloqueado_ate=? WHERE uid=?")) {
             statement.setInt(1, bloquear ? 0 : erros);
-            statement.setLong(2, bloquear ? System.currentTimeMillis() + 120_000L : 0);
+            statement.setLong(2, bloquear ? currentTimeMillis + 120_000L : 0);
             statement.setLong(3, uid);
             statement.executeUpdate();
         }
@@ -309,12 +313,16 @@ public class Database implements AutoCloseable {
     }
 
     public int recordTokenFailure(long uid) throws SQLException {
+        return recordTokenFailure(uid, System.currentTimeMillis());
+    }
+
+    int recordTokenFailure(long uid, long currentTimeMillis) throws SQLException {
         int erros = findUser(uid).tokenFailures() + 1;
         boolean bloquear = erros >= 3;
         try (PreparedStatement statement = conexao.prepareStatement(
                 "UPDATE Usuarios SET erros_token=?, bloqueado_ate=? WHERE uid=?")) {
             statement.setInt(1, bloquear ? 0 : erros);
-            statement.setLong(2, bloquear ? System.currentTimeMillis() + 120_000L : 0);
+            statement.setLong(2, bloquear ? currentTimeMillis + 120_000L : 0);
             statement.setLong(3, uid);
             statement.executeUpdate();
         }
@@ -330,10 +338,14 @@ public class Database implements AutoCloseable {
     }
 
     public void clearExpiredLock(long uid) throws SQLException {
+        clearExpiredLock(uid, System.currentTimeMillis());
+    }
+
+    void clearExpiredLock(long uid, long currentTimeMillis) throws SQLException {
         try (PreparedStatement statement = conexao.prepareStatement(
                 "UPDATE Usuarios SET bloqueado_ate=0 WHERE uid=? AND bloqueado_ate<=?")) {
             statement.setLong(1, uid);
-            statement.setLong(2, System.currentTimeMillis());
+            statement.setLong(2, currentTimeMillis);
             statement.executeUpdate();
         }
     }

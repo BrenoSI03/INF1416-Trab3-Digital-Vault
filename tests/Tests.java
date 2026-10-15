@@ -78,6 +78,16 @@ public class Tests {
         truncamento.setAccessible(true);
         check("000000".equals(truncamento.invoke(totp, (Object) new byte[20])),
                 "TOTP preserva zeros à esquerda");
+        boolean zeroInicialValidado = false;
+        SecureRandom random = new SecureRandom();
+        for (int i = 0; i < 1_000 && !zeroInicialValidado; i++) {
+            byte[] segredoComZero = new byte[20];
+            random.nextBytes(segredoComZero);
+            TOTP totpComZero = new TOTP(base32.toString(segredoComZero), 30);
+            String codigo = totpComZero.generateCode();
+            zeroInicialValidado = codigo.startsWith("0") && totpComZero.validateCode(codigo);
+        }
+        check(zeroInicialValidado, "TOTP iniciado por zero é validado com seis dígitos");
     }
 
     private static void testBasicCryptography() throws Exception {
@@ -501,13 +511,20 @@ public class Tests {
             banco.logEvent(1005, null, null);
             check(hasLogSuffix(banco, 1001, 1005),
                     "primeira execução registra partida para cadastro do administrador");
+            char[] adminPin = "13572468".toCharArray();
+            char[] ownerPin = "135724689".toCharArray();
+            char[] recipientPin = "1357246890".toCharArray();
             long adminUid = insertTestUser(banco, admin, Database.ADMIN_GROUP_ID,
-                    "frase-admin-teste".toCharArray());
-            insertTestUser(banco, owner, Database.USER_GROUP_ID, "frase-owner-teste".toCharArray());
+                    "frase-admin-teste".toCharArray(), adminPin);
+            long ownerUid = insertTestUser(banco, owner, Database.USER_GROUP_ID,
+                    "frase-owner-teste".toCharArray(), ownerPin);
             long recipientUid = insertTestUser(banco, recipient, Database.USER_GROUP_ID,
-                    "frase-recipient-teste".toCharArray());
+                    "frase-recipient-teste".toCharArray(), recipientPin);
             check(banco.countUsers() == 3 && banco.findAdministrator().uid() == adminUid,
                     "cadastro transacional e administrador");
+            verifyDatabasePasswordAndTotp(banco.findUser(adminUid), adminPin);
+            verifyDatabasePasswordAndTotp(banco.findUser(ownerUid), ownerPin);
+            verifyDatabasePasswordAndTotp(banco.findUser(recipientUid), recipientPin);
             Database.User administradorCadastrado = banco.findUser(adminUid);
             Database.User destinatarioCadastrado = banco.findUser(recipientUid);
             check(DigitalVault.canRegisterUser(administradorCadastrado)
@@ -658,6 +675,56 @@ public class Tests {
             check(destinoInvalidoRecusado,
                     "destino que não é diretório é recusado sem alteração");
 
+            Path cifra = pastaVault.resolve("TST900.enc");
+            Path cifraReal = pastaVault.resolve("TST900.enc.real");
+            Files.move(cifra, cifraReal);
+            boolean linksSimbolicosDisponiveis = true;
+            boolean origemSimbolicaRecusada = false;
+            try {
+                try {
+                    Files.createSymbolicLink(cifra, cifraReal.getFileName());
+                } catch (java.io.IOException | UnsupportedOperationException | SecurityException error) {
+                    linksSimbolicosDisponiveis = false;
+                }
+                if (linksSimbolicosDisponiveis) {
+                    try {
+                        cofre.openFile(catalogo, compartilhado, usuario,
+                                recipient.privateKey(), raiz.resolve("symbolic-source-output"));
+                    } catch (Exception expected) {
+                        origemSimbolicaRecusada = true;
+                    }
+                }
+            } finally {
+                Files.deleteIfExists(cifra);
+                Files.move(cifraReal, cifra);
+            }
+            if (linksSimbolicosDisponiveis) {
+                check(origemSimbolicaRecusada,
+                        "link simbólico usado como arquivo do cofre é recusado");
+
+                Path destinoReal = raiz.resolve("real-symbolic-output");
+                Path destinoSimbolico = raiz.resolve("symbolic-output");
+                Files.createDirectories(destinoReal);
+                Files.createSymbolicLink(destinoSimbolico, destinoReal);
+                boolean destinoSimbolicoRecusado = false;
+                try {
+                    cofre.openFile(catalogo, compartilhado, usuario,
+                            recipient.privateKey(), destinoSimbolico);
+                } catch (Exception expected) {
+                    destinoSimbolicoRecusado = !Files.exists(destinoReal.resolve("shared.txt"));
+                }
+                check(destinoSimbolicoRecusado, "link simbólico usado como destino é recusado");
+            } else {
+                System.out.println("IGNORADO - Windows não permitiu criar links simbólicos");
+            }
+
+            String mensagemSegura = DigitalVault.message(
+                    new java.nio.file.NoSuchFileException("C:\\dados-privados\\admin.key"));
+            check(!mensagemSegura.contains("dados-privados")
+                    && !mensagemSegura.contains("NoSuchFileException")
+                    && !mensagemSegura.contains("\n"),
+                    "interface não exibe caminho privado nem stack trace");
+
             Path saidaOwner = raiz.resolve("owner-output");
             Files.createDirectories(saidaOwner);
             Database.User dono = banco.findUser(owner.email());
@@ -756,6 +823,14 @@ public class Tests {
                 Files.move(shareReserva, shareAssinatura);
             }
             check(ausenteRecusado, "assinatura share ausente registra MID 7013");
+
+            testMissingFile(pastaVault.resolve("index.enc"), () ->
+                    cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
+                    "arquivo exigido do index ausente é recusado");
+            testMissingFile(pastaVault.resolve("TST900.7.shr"), () ->
+                    cofre.openFile(catalogo, compartilhado, usuario,
+                            recipient.privateKey(), saidaErros),
+                    "envelope exigido do documento ausente é recusado");
 
             boolean pastaAusenteRecusada = false;
             try {
@@ -905,7 +980,30 @@ public class Tests {
                 grupoInvalidoRecusado = banco.countUsers() == 3;
             }
             check(grupoInvalidoRecusado, "grupo inválido desfaz cadastro por transação");
-            long ownerUid = banco.findUser(owner.email()).uid();
+            try (var conexao = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+                    var statement = conexao.createStatement()) {
+                statement.executeUpdate("""
+                        CREATE TRIGGER fail_keyring BEFORE INSERT ON Chaveiro
+                        BEGIN SELECT RAISE(ABORT, 'falha de teste'); END
+                        """);
+            }
+            boolean falhaIntermediariaDesfeita = false;
+            try {
+                banco.insertUser("Cadastro interrompido", "rollback@teste.local",
+                        Database.USER_GROUP_ID, java.util.UUID.randomUUID().toString(),
+                        usuario.passwordHash(), usuario.encryptedTotpSecret(),
+                        recipient.certificatePem(), Files.readAllBytes(recipient.encryptedKeyPath()));
+            } catch (Exception expected) {
+                falhaIntermediariaDesfeita = banco.countUsers() == 3
+                        && banco.findUser("rollback@teste.local") == null;
+            } finally {
+                try (var conexao = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+                        var statement = conexao.createStatement()) {
+                    statement.executeUpdate("DROP TRIGGER fail_keyring");
+                }
+            }
+            check(falhaIntermediariaDesfeita,
+                    "falha no Chaveiro desfaz a inserção anterior em Usuarios");
             banco.logEvent(4001, ownerUid, null);
             check(DigitalVault.recordTokenFailure(banco, ownerUid) == 1
                     && DigitalVault.recordTokenFailure(banco, ownerUid) == 2,
@@ -923,6 +1021,25 @@ public class Tests {
                     && banco.findUser(recipientUid).lockedUntil() == 0
                     && hasLogSuffix(banco, 4004, 4005, 4006, 4007, 4002),
                     "terceiro erro de TOTP bloqueia só a conta e registra os MIDs da etapa 3");
+
+            long horarioFixo = 1_800_000_000_000L;
+            banco.clearPasswordFailures(adminUid);
+            banco.recordPasswordFailure(adminUid, horarioFixo);
+            banco.recordPasswordFailure(adminUid, horarioFixo);
+            banco.recordPasswordFailure(adminUid, horarioFixo);
+            long expiracaoEsperada = horarioFixo + 120_000L;
+            check(banco.findUser(adminUid).lockedUntil() == expiracaoEsperada,
+                    "bloqueio usa exatamente 120 segundos do relógio informado");
+            try (Database reaberto = new Database(databaseFile)) {
+                check(reaberto.findUser(adminUid).lockedUntil() == expiracaoEsperada,
+                        "data de expiração permanece após reinicialização");
+                reaberto.clearExpiredLock(adminUid, expiracaoEsperada - 1);
+                check(reaberto.findUser(adminUid).lockedUntil() == expiracaoEsperada,
+                        "bloqueio permanece antes do instante de expiração");
+                reaberto.clearExpiredLock(adminUid, expiracaoEsperada);
+                check(reaberto.findUser(adminUid).lockedUntil() == 0,
+                        "bloqueio termina no instante de expiração");
+            }
             banco.logEvent(8002, ownerUid, null);
             DigitalVault.recordSessionEnd(banco, banco.findUser(ownerUid));
             check(hasLogSuffix(banco, 8002, 1004),
@@ -940,6 +1057,23 @@ public class Tests {
                     && ultimo.message().contains("<arq_name>"),
                     "registro guarda MID, usuário e arquivo; texto vem de Mensagens");
         }
+
+        Database conexaoPerdida = new Database(raiz.resolve("lost-connection.db"));
+        conexaoPerdida.close();
+        boolean logRecusado = false;
+        boolean autenticacaoRecusada = false;
+        try {
+            conexaoPerdida.logEvent(1001, null, null);
+        } catch (Exception expected) {
+            logRecusado = true;
+        }
+        try {
+            DigitalVault.identifyUser(conexaoPerdida, recipient.email());
+        } catch (Exception expected) {
+            autenticacaoRecusada = true;
+        }
+        check(logRecusado && autenticacaoRecusada,
+                "conexão perdida impede registro e não autoriza autenticação");
 
         Path orderDatabase = raiz.resolve("order-test.db");
         try (Database banco = new Database(orderDatabase)) {
@@ -992,6 +1126,21 @@ public class Tests {
             recusou = true;
         } finally {
             Files.write(arquivo, original);
+        }
+        check(recusou, descricao);
+    }
+
+    private static void testMissingFile(Path arquivo, Operation operacao, String descricao)
+            throws Exception {
+        Path reserva = arquivo.resolveSibling(arquivo.getFileName() + ".missing");
+        Files.move(arquivo, reserva);
+        boolean recusou = false;
+        try {
+            operacao.run();
+        } catch (Exception expected) {
+            recusou = true;
+        } finally {
+            Files.move(reserva, arquivo);
         }
         check(recusou, descricao);
     }
@@ -1065,7 +1214,11 @@ public class Tests {
 
     private static long insertTestUser(Database banco, Identity identidade, int grupo,
             char[] frase) throws Exception {
-        char[] pin = "13572468".toCharArray();
+        return insertTestUser(banco, identidade, grupo, frase, "13572468".toCharArray());
+    }
+
+    private static long insertTestUser(Database banco, Identity identidade, int grupo,
+            char[] frase, char[] pin) throws Exception {
         byte[] segredo = new byte[20];
         new SecureRandom().nextBytes(segredo);
         String base32 = new Base32().toString(segredo);
@@ -1074,6 +1227,38 @@ public class Tests {
                 CryptoUtils.generateBcrypt(pin),
                 CryptoUtils.encryptAes(base32.getBytes(StandardCharsets.US_ASCII), pin),
                 identidade.certificatePem(), Files.readAllBytes(identidade.encryptedKeyPath()));
+    }
+
+    private static void verifyDatabasePasswordAndTotp(Database.User user, char[] pin)
+            throws Exception {
+        javax.swing.JButton[] buttons = new javax.swing.JButton[5];
+        for (int i = 0; i < buttons.length; i++) {
+            buttons[i] = new javax.swing.JButton();
+        }
+        List<char[]> pressedPairs = new ArrayList<>();
+        for (char digit : pin) {
+            boolean recorded = false;
+            while (!recorded) {
+                DigitalVault.distributeDigits(buttons);
+                for (javax.swing.JButton button : buttons) {
+                    if (button.getText().charAt(0) == digit) {
+                        DigitalVault.recordPressedPair(pressedPairs, button.getText());
+                        recorded = true;
+                        break;
+                    }
+                }
+            }
+        }
+        char[] verifiedPin = DigitalVault.findPassword(pressedPairs, user.passwordHash());
+        check(Arrays.equals(pin, verifiedPin),
+                "PIN de " + pin.length + " dígitos do banco é encontrado com pares regenerados");
+        byte[] encodedSecret = CryptoUtils.decryptAes(user.encryptedTotpSecret(), verifiedPin);
+        String secret = new String(encodedSecret, StandardCharsets.US_ASCII);
+        String code = new TOTP(secret, 30).generateCode();
+        check(DigitalVault.verifyToken(user.encryptedTotpSecret(), verifiedPin, code),
+                "PIN de " + pin.length + " dígitos abre e valida o TOTP armazenado");
+        CryptoUtils.clear(verifiedPin);
+        Arrays.fill(encodedSecret, (byte) 0);
     }
 
     private static Identity createIdentity(Path raiz, String alias, String nome,
