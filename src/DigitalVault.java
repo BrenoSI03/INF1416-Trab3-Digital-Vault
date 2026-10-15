@@ -38,6 +38,16 @@ import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 
 public class DigitalVault {
+    static final String EXIT_MESSAGE = "Pressione o botão Encerrar Sessão ou o botão "
+            + "Encerrar Sistema para confirmar.";
+
+    record LoginResult(Database.User user, int eventCode) {
+    }
+
+    record RegistrationMaterial(X509Certificate certificate, byte[] certificatePem,
+            byte[] encryptedPrivateKey, PrivateKey privateKey) {
+    }
+
     private final Database banco;
     private final Vault cofre;
     private final JFrame janela = new JFrame("Cofre Digital");
@@ -170,22 +180,16 @@ public class DigitalVault {
         confirmar.addActionListener(event -> {
             try {
                 String login = email.getText().trim();
-                Database.User usuario = banco.findUser(login);
-                if (usuario == null) {
-                    banco.logEvent(2005, null, null);
+                LoginResult result = identifyUser(banco, login);
+                if (result.eventCode() == 2005) {
                     showMessage("Login name não identificado.");
                     return;
                 }
-                banco.clearExpiredLock(usuario.uid());
-                usuario = banco.findUser(usuario.uid());
-                if (usuario.lockedUntil() > System.currentTimeMillis()) {
-                    banco.logEvent(2004, usuario.uid(), null);
+                if (result.eventCode() == 2004) {
                     showMessage("Acesso bloqueado temporariamente.");
                     return;
                 }
-                banco.logEvent(2003, usuario.uid(), null);
-                banco.logEvent(2002, usuario.uid(), null);
-                usuarioAtual = usuario;
+                usuarioAtual = result.user();
                 showVirtualKeyboard();
             } catch (Exception error) {
                 showError(error);
@@ -194,6 +198,23 @@ public class DigitalVault {
         limpar.addActionListener(event -> email.setText(""));
         showPanel(painel);
         email.requestFocusInWindow();
+    }
+
+    static LoginResult identifyUser(Database database, String email) throws Exception {
+        Database.User user = database.findUser(email);
+        if (user == null) {
+            database.logEvent(2005, null, null);
+            return new LoginResult(null, 2005);
+        }
+        database.clearExpiredLock(user.uid());
+        user = database.findUser(user.uid());
+        if (user.lockedUntil() > System.currentTimeMillis()) {
+            database.logEvent(2004, user.uid(), null);
+            return new LoginResult(user, 2004);
+        }
+        database.logEvent(2003, user.uid(), null);
+        database.logEvent(2002, user.uid(), null);
+        return new LoginResult(user, 2003);
     }
 
     private void showVirtualKeyboard() {
@@ -255,9 +276,7 @@ public class DigitalVault {
                     }
                     return;
                 }
-                banco.clearPasswordFailures(usuarioAtual.uid());
-                banco.logEvent(3003, usuarioAtual.uid(), null);
-                banco.logEvent(3002, usuarioAtual.uid(), null);
+                recordPasswordSuccess(banco, usuarioAtual.uid());
                 senhaComprovada = senha;
                 showToken();
             } catch (Exception error) {
@@ -316,17 +335,30 @@ public class DigitalVault {
     }
 
     private void handlePasswordFailure() throws Exception {
-        int erros = banco.recordPasswordFailure(usuarioAtual.uid());
-        banco.logEvent(3003 + erros, usuarioAtual.uid(), null);
+        int erros = recordPasswordFailure(banco, usuarioAtual.uid());
         if (erros >= 3) {
-            banco.logEvent(3007, usuarioAtual.uid(), null);
-            banco.logEvent(3002, usuarioAtual.uid(), null);
             showMessage("Terceiro erro. O acesso foi bloqueado por 2 minutos.");
             showLogin();
         } else {
             showMessage("Senha pessoal inválida. Erro " + erros + " de 3.");
             showVirtualKeyboard(false);
         }
+    }
+
+    static void recordPasswordSuccess(Database database, long uid) throws Exception {
+        database.clearPasswordFailures(uid);
+        database.logEvent(3003, uid, null);
+        database.logEvent(3002, uid, null);
+    }
+
+    static int recordPasswordFailure(Database database, long uid) throws Exception {
+        int failures = database.recordPasswordFailure(uid);
+        database.logEvent(3003 + failures, uid, null);
+        if (failures >= 3) {
+            database.logEvent(3007, uid, null);
+            database.logEvent(3002, uid, null);
+        }
+        return failures;
     }
 
     private void showToken() {
@@ -362,11 +394,7 @@ public class DigitalVault {
                     handleTokenFailure();
                     return;
                 }
-                banco.clearTokenFailures(usuarioAtual.uid());
-                banco.logEvent(4003, usuarioAtual.uid(), null);
-                banco.logEvent(4002, usuarioAtual.uid(), null);
-                banco.logEvent(1003, usuarioAtual.uid(), null);
-                banco.incrementAccessCount(usuarioAtual.uid());
+                recordAuthenticationSuccess(banco, usuarioAtual.uid());
                 clearVerifiedPassword();
                 usuarioAtual = banco.findUser(usuarioAtual.uid());
                 showMainMenu();
@@ -393,17 +421,32 @@ public class DigitalVault {
     }
 
     private void handleTokenFailure() throws Exception {
-        int erros = banco.recordTokenFailure(usuarioAtual.uid());
-        banco.logEvent(4003 + erros, usuarioAtual.uid(), null);
+        int erros = recordTokenFailure(banco, usuarioAtual.uid());
         if (erros >= 3) {
-            banco.logEvent(4007, usuarioAtual.uid(), null);
-            banco.logEvent(4002, usuarioAtual.uid(), null);
             showMessage("Terceiro erro. O acesso foi bloqueado por 2 minutos.");
             showLogin();
         } else {
             showMessage("Token inválido. Erro " + erros + " de 3.");
             showToken(false);
         }
+    }
+
+    static void recordAuthenticationSuccess(Database database, long uid) throws Exception {
+        database.clearTokenFailures(uid);
+        database.logEvent(4003, uid, null);
+        database.logEvent(4002, uid, null);
+        database.logEvent(1003, uid, null);
+        database.incrementAccessCount(uid);
+    }
+
+    static int recordTokenFailure(Database database, long uid) throws Exception {
+        int failures = database.recordTokenFailure(uid);
+        database.logEvent(4003 + failures, uid, null);
+        if (failures >= 3) {
+            database.logEvent(4007, uid, null);
+            database.logEvent(4002, uid, null);
+        }
+        return failures;
     }
 
     private void showMainMenu() {
@@ -417,7 +460,7 @@ public class DigitalVault {
         JPanel painel = createBasePanel("Tela Principal");
         JPanel centro = new JPanel(new GridLayout(0, 1, 8, 8));
         centro.add(new JLabel("Total de acessos do usuário: " + usuarioAtual.accessCount()));
-        if (usuarioAtual.isAdministrator()) {
+        if (canRegisterUser(usuarioAtual)) {
             JButton cadastrar = new JButton("1 — Cadastrar um novo usuário");
             cadastrar.addActionListener(event -> {
                 try {
@@ -457,7 +500,7 @@ public class DigitalVault {
     }
 
     private void showRegistration(boolean inicial) {
-        if (!inicial && (usuarioAtual == null || !usuarioAtual.isAdministrator())) {
+        if (!inicial && !canRegisterUser(usuarioAtual)) {
             showMessage("Somente administradores podem cadastrar usuários.");
             return;
         }
@@ -516,51 +559,12 @@ public class DigitalVault {
                     banco.logEvent(6003, inicial ? null : usuarioAtual.uid(), null);
                     throw new Exception("A senha deve ter de 8 a 10 dígitos, sem dígitos iguais consecutivos, e coincidir com a confirmação.");
                 }
-                Path caminhoCertificado = Path.of(certificado.getText().trim());
-                X509Certificate certificadoLido;
-                byte[] certificadoPem;
-                try {
-                    certificadoPem = Files.readAllBytes(caminhoCertificado);
-                    String inicioPem = new String(certificadoPem, StandardCharsets.US_ASCII);
-                    if (!inicioPem.contains("-----BEGIN CERTIFICATE-----")) {
-                        throw new Exception();
-                    }
-                    certificadoLido = CryptoUtils.loadCertificate(certificadoPem);
-                    certificadoLido.checkValidity();
-                } catch (Exception error) {
-                    banco.logEvent(6004, inicial ? null : usuarioAtual.uid(), null);
-                    throw new Exception("Caminho ou certificado digital inválido.");
-                }
-                byte[] chaveCifrada;
-                try {
-                    chaveCifrada = Files.readAllBytes(Path.of(chave.getText().trim()));
-                } catch (Exception error) {
-                    banco.logEvent(6005, inicial ? null : usuarioAtual.uid(), null);
-                    throw new Exception("Caminho da chave privada inválido.");
-                }
-                PrivateKey privada;
-                try {
-                    byte[] chaveAberta = CryptoUtils.decryptAes(chaveCifrada, fraseInformada);
-                    try {
-                        privada = CryptoUtils.restorePrivateKey(chaveAberta);
-                    } finally {
-                        java.util.Arrays.fill(chaveAberta, (byte) 0);
-                    }
-                } catch (Exception error) {
-                    banco.logEvent(6006, inicial ? null : usuarioAtual.uid(), null);
-                    throw new Exception("Frase secreta inválida.");
-                }
-                boolean parValido;
-                try {
-                    parValido = CryptoUtils.proveKeyPair(
-                            privada, certificadoLido.getPublicKey(), 10_240);
-                } catch (Exception error) {
-                    parValido = false;
-                }
-                if (!parValido) {
-                    banco.logEvent(6007, inicial ? null : usuarioAtual.uid(), null);
-                    throw new Exception("A chave privada não corresponde ao certificado.");
-                }
+                Long actorUid = inicial ? null : usuarioAtual.uid();
+                RegistrationMaterial material = loadRegistrationMaterial(banco, actorUid,
+                        certificado.getText().trim(), chave.getText().trim(), fraseInformada);
+                X509Certificate certificadoLido = material.certificate();
+                byte[] certificadoPem = material.certificatePem();
+                byte[] chaveCifrada = material.encryptedPrivateKey();
                 String email = CryptoUtils.extractEmail(certificadoLido);
                 String nome = CryptoUtils.extractName(certificadoLido);
                 if (email == null || nome == null || !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
@@ -613,6 +617,10 @@ public class DigitalVault {
             }
         });
         showPanel(painel);
+    }
+
+    static boolean canRegisterUser(Database.User user) {
+        return user != null && user.isAdministrator();
     }
 
     static boolean isPasswordValid(char[] senha) {
@@ -746,7 +754,7 @@ public class DigitalVault {
         JPanel painel = createBasePanel("Saída do sistema");
         JPanel centro = new JPanel(new GridLayout(0, 1, 8, 8));
         centro.add(new JLabel("Total de acessos do usuário: " + usuarioAtual.accessCount()));
-        centro.add(new JLabel("Pressione o botão Encerrar Sessão ou o botão Encerrar Sistema para confirmar."));
+        centro.add(new JLabel(EXIT_MESSAGE));
         JButton sessao = new JButton("Encerrar Sessão");
         JButton sistema = new JButton("Encerrar Sistema");
         JButton voltar = new JButton("Voltar de Sair para o Menu Principal");
@@ -757,7 +765,7 @@ public class DigitalVault {
         sessao.addActionListener(event -> {
             try {
                 banco.logEvent(8002, usuarioAtual.uid(), null);
-                banco.logEvent(1004, usuarioAtual.uid(), null);
+                recordSessionEnd(banco, usuarioAtual);
                 showLogin();
             } catch (Exception error) {
                 showError(error);
@@ -766,11 +774,9 @@ public class DigitalVault {
         sistema.addActionListener(event -> {
             try {
                 banco.logEvent(8003, usuarioAtual.uid(), null);
-                banco.logEvent(1004, usuarioAtual.uid(), null);
             } catch (Exception error) {
                 showError(error);
             }
-            usuarioAtual = null;
             shutDown();
         });
         voltar.addActionListener(event -> {
@@ -790,18 +796,26 @@ public class DigitalVault {
         }
         encerrado = true;
         try {
-            if (usuarioAtual != null) {
-                banco.logEvent(1004, usuarioAtual.uid(), null);
-            }
+            recordSessionEnd(banco, usuarioAtual);
             banco.logEvent(1002, null, null);
-            banco.close();
         } catch (Exception ignored) {
             // Não há interface disponível para recuperar uma falha durante o encerramento.
         } finally {
+            try {
+                banco.close();
+            } catch (Exception ignored) {
+                // O encerramento continua para que os segredos sejam limpos da memória.
+            }
             clearVerifiedPassword();
             CryptoUtils.clear(fraseAdministrador);
             fraseAdministrador = null;
             janela.dispose();
+        }
+    }
+
+    static void recordSessionEnd(Database database, Database.User user) throws Exception {
+        if (user != null) {
+            database.logEvent(1004, user.uid(), null);
         }
     }
 
@@ -813,6 +827,58 @@ public class DigitalVault {
             throw new Exception("A chave privada não corresponde ao certificado.");
         }
         return privateKey;
+    }
+
+    static RegistrationMaterial loadRegistrationMaterial(Database database, Long actorUid,
+            String certificatePath, String privateKeyPath, char[] passphrase) throws Exception {
+        byte[] certificatePem;
+        X509Certificate certificate;
+        try {
+            certificatePem = Files.readAllBytes(Path.of(certificatePath));
+            String pemText = new String(certificatePem, StandardCharsets.US_ASCII);
+            if (!pemText.contains("-----BEGIN CERTIFICATE-----")) {
+                throw new Exception();
+            }
+            certificate = CryptoUtils.loadCertificate(certificatePem);
+            certificate.checkValidity();
+        } catch (Exception error) {
+            database.logEvent(6004, actorUid, null);
+            throw new Exception("Caminho ou certificado digital inválido.");
+        }
+
+        byte[] encryptedPrivateKey;
+        try {
+            encryptedPrivateKey = Files.readAllBytes(Path.of(privateKeyPath));
+        } catch (Exception error) {
+            database.logEvent(6005, actorUid, null);
+            throw new Exception("Caminho da chave privada inválido.");
+        }
+
+        PrivateKey privateKey;
+        try {
+            byte[] openPrivateKey = CryptoUtils.decryptAes(encryptedPrivateKey, passphrase);
+            try {
+                privateKey = CryptoUtils.restorePrivateKey(openPrivateKey);
+            } finally {
+                java.util.Arrays.fill(openPrivateKey, (byte) 0);
+            }
+        } catch (Exception error) {
+            database.logEvent(6006, actorUid, null);
+            throw new Exception("Frase secreta inválida.");
+        }
+
+        boolean validPair;
+        try {
+            validPair = CryptoUtils.proveKeyPair(privateKey, certificate.getPublicKey(), 10_240);
+        } catch (Exception error) {
+            validPair = false;
+        }
+        if (!validPair) {
+            database.logEvent(6007, actorUid, null);
+            throw new Exception("A chave privada não corresponde ao certificado.");
+        }
+        return new RegistrationMaterial(
+                certificate, certificatePem, encryptedPrivateKey, privateKey);
     }
 
     private static PrivateKey restoreKey(Database.KeyEntry chaveiro, char[] frase) throws Exception {
@@ -866,7 +932,7 @@ public class DigitalVault {
         confirmacao.setText("");
     }
 
-    private static String certificateDetails(X509Certificate certificado,
+    static String certificateDetails(X509Certificate certificado,
             String nome, String email) {
         DateTimeFormatter formato = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
                 .withZone(ZoneId.systemDefault());

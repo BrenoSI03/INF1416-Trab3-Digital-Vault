@@ -42,6 +42,7 @@ public class Tests {
         testBasicCryptography();
         testVirtualKeyboard();
         testFieldLimits();
+        testOfficialMessages();
         testOriginalPackageStructure();
         testDatabaseAndVault(raiz, pastaVault, saida);
         System.out.println("OK - " + verificacoes + " verificações executadas.");
@@ -123,6 +124,10 @@ public class Tests {
             pemIncompletoRecusado = true;
         }
         check(pemIncompletoRecusado, "PEM sem rodapé recusado");
+        char[] segredoTemporario = "frase-temporaria".toCharArray();
+        CryptoUtils.clear(segredoTemporario);
+        check(new String(segredoTemporario).chars().allMatch(value -> value == 0),
+                "frase mantida em char[] pode ser limpa no encerramento");
     }
 
     private static void testVirtualKeyboard() throws Exception {
@@ -232,6 +237,87 @@ public class Tests {
         check("1234567890".equals(campo.getText()), "campo aceita o limite exato");
         campo.setText("12345678901");
         check("1234567890".equals(campo.getText()), "campo recusa texto acima do limite");
+    }
+
+    private static void testOfficialMessages() {
+        Map<Integer, String> messages = expectedOfficialMessages();
+        check(messages.size() == 64, "catálogo de auditoria contém os 64 MIDs oficiais");
+    }
+
+    private static Map<Integer, String> expectedOfficialMessages() {
+        String table = """
+                1001|Sistema iniciado.
+                1002|Sistema encerrado.
+                1003|Sessão iniciada para <login_name>.
+                1004|Sessão encerrada para <login_name>.
+                1005|Partida do sistema iniciada para cadastro do administrador.
+                1006|Partida do sistema iniciada para operação normal pelos usuários.
+                2001|Autenticação etapa 1 iniciada.
+                2002|Autenticação etapa 1 encerrada.
+                2003|Login name <login_name> identificado com acesso liberado.
+                2004|Login name <login_name> identificado com acesso bloqueado.
+                2005|Login name <login_name> não identificado.
+                3001|Autenticação etapa 2 iniciada para <login_name>.
+                3002|Autenticação etapa 2 encerrada para <login_name>.
+                3003|Senha pessoal verificada positivamente para <login_name>.
+                3004|Primeiro erro da senha pessoal contabilizado para <login_name>.
+                3005|Segundo erro da senha pessoal contabilizado para <login_name>.
+                3006|Terceiro erro da senha pessoal contabilizado para <login_name>.
+                3007|Acesso do usuario <login_name> bloqueado pela autenticação etapa 2.
+                4001|Autenticação etapa 3 iniciada para <login_name>.
+                4002|Autenticação etapa 3 encerrada para <login_name>.
+                4003|Token verificado positivamente para <login_name>.
+                4004|Primeiro erro de token contabilizado para <login_name>.
+                4005|Segundo erro de token contabilizado para <login_name>.
+                4006|Terceiro erro de token contabilizado para <login_name>.
+                4007|Acesso do usuario <login_name> bloqueado pela autenticação etapa 3.
+                5001|Tela principal apresentada para <login_name>.
+                5002|Opção 1 do menu principal selecionada por <login_name>.
+                5003|Opção 2 do menu principal selecionada por <login_name>.
+                5004|Opção 3 do menu principal selecionada por <login_name>.
+                6001|Tela de cadastro apresentada para <login_name>.
+                6002|Botão cadastrar pressionado por <login_name>.
+                6003|Senha pessoal inválida fornecida por <login_name>.
+                6004|Caminho do certificado digital inválido fornecido por <login_name>.
+                6005|Chave privada verificada negativamente para <login_name> (caminho inválido).
+                6006|Chave privada verificada negativamente para <login_name> (frase secreta inválida).
+                6007|Chave privada verificada negativamente para <login_name> (assinatura digital inválida).
+                6008|Confirmação de dados aceita por <login_name>.
+                6009|Confirmação de dados rejeitada por <login_name>.
+                6010|Botão voltar de cadastro para o menu principal pressionado por <login_name>.
+                7001|Tela de consulta de arquivos secretos apresentada para <login_name>.
+                7002|Botão voltar de consulta para o menu principal pressionado por <login_name>.
+                7003|Botão Listar de consulta pressionado por <login_name>.
+                7004|Caminho de pasta inválido fornecido por <login_name>.
+                7005|Arquivo de índice decriptado com sucesso para <login_name>.
+                7006|Arquivo de índice verificado (integridade e autenticidade) com sucesso para <login_name>.
+                7007|Falha na decriptação do arquivo de índice para <login_name>.
+                7008|Falha na verificação (integridade e autenticidade) do arquivo de índice para <login_name>.
+                7009|Lista de arquivos presentes no índice apresentada para <login_name>.
+                7010|Arquivo de share decriptado com sucesso para <login_name>.
+                7011|Arquivo de share verificado (integridade e autenticidade) com sucesso para <login_name>.
+                7012|Falha na decriptação do arquivo de share para <login_name>.
+                7013|Falha na verificação (integridade e autenticidade) do arquivo de share para <login_name>.
+                7014|Lista de arquivos presentes no share apresentada para <login_name>.
+                7015|Arquivo <arq_name> selecionado por <login_name> para decriptação.
+                7016|Acesso permitido ao arquivo <arq_name> para <login_name>.
+                7017|Acesso negado ao arquivo <arq_name> para <login_name>.
+                7018|Arquivo <arq_name> decriptado com sucesso para <login_name>.
+                7019|Arquivo <arq_name> verificado (integridade e autenticidade) com sucesso para <login_name>.
+                7020|Falha na decriptação do arquivo <arq_name> para <login_name>.
+                7021|Falha na verificação (integridade e autenticidade) do arquivo <arq_name> para <login_name>.
+                8001|Tela de saída apresentada para <login_name>.
+                8002|Botão encerrar sessão pressionado por <login_name>.
+                8003|Botão encerrar sistema pressionado por <login_name>.
+                8004|Botão voltar de sair para o menu principal pressionado por <login_name>.
+                """;
+        Map<Integer, String> messages = new java.util.TreeMap<>();
+        for (String line : table.lines().toList()) {
+            int separator = line.indexOf('|');
+            messages.put(Integer.parseInt(line.substring(0, separator)),
+                    line.substring(separator + 1));
+        }
+        return messages;
     }
 
     private static void testOriginalPackageStructure() throws Exception {
@@ -407,6 +493,14 @@ public class Tests {
         Path databaseFile = raiz.resolve("test.db");
         try (Database banco = new Database(databaseFile)) {
             check(banco.countMessages() == 64, "64 mensagens oficiais");
+            check(readMessages(databaseFile).equals(expectedOfficialMessages()),
+                    "textos dos 64 MIDs correspondem à tabela oficial");
+            check(!banco.hasUsers() && banco.findAdministrator() == null,
+                    "banco novo não cria usuário padrão");
+            banco.logEvent(1001, null, null);
+            banco.logEvent(1005, null, null);
+            check(hasLogSuffix(banco, 1001, 1005),
+                    "primeira execução registra partida para cadastro do administrador");
             long adminUid = insertTestUser(banco, admin, Database.ADMIN_GROUP_ID,
                     "frase-admin-teste".toCharArray());
             insertTestUser(banco, owner, Database.USER_GROUP_ID, "frase-owner-teste".toCharArray());
@@ -414,6 +508,77 @@ public class Tests {
                     "frase-recipient-teste".toCharArray());
             check(banco.countUsers() == 3 && banco.findAdministrator().uid() == adminUid,
                     "cadastro transacional e administrador");
+            Database.User administradorCadastrado = banco.findUser(adminUid);
+            Database.User destinatarioCadastrado = banco.findUser(recipientUid);
+            check(DigitalVault.canRegisterUser(administradorCadastrado)
+                    && !DigitalVault.canRegisterUser(destinatarioCadastrado),
+                    "somente o grupo Administrador pode cadastrar usuários");
+            String detalhesCertificado = DigitalVault.certificateDetails(
+                    recipient.certificate(), CryptoUtils.extractName(recipient.certificate()),
+                    CryptoUtils.extractEmail(recipient.certificate()));
+            check(detalhesCertificado.contains("Versão:")
+                    && detalhesCertificado.contains("Série:")
+                    && detalhesCertificado.contains("Validade:")
+                    && detalhesCertificado.contains("Tipo de assinatura:")
+                    && detalhesCertificado.contains("Emissor:")
+                    && detalhesCertificado.contains("Sujeito:")
+                    && detalhesCertificado.contains("E-mail: " + recipient.email()),
+                    "confirmação apresenta os campos exigidos do certificado");
+            DigitalVault.RegistrationMaterial material = DigitalVault.loadRegistrationMaterial(
+                    banco, adminUid, raiz.resolve("recipient-test-x509.crt").toString(),
+                    recipient.encryptedKeyPath().toString(),
+                    "frase-recipient-teste".toCharArray());
+            check(CryptoUtils.proveKeyPair(material.privateKey(),
+                    material.certificate().getPublicKey(), 10_240),
+                    "cadastro valida o par com desafio aleatório de 10240 bytes");
+            check(registrationFailsWith(banco, adminUid,
+                    raiz.resolve("certificado-ausente.crt").toString(),
+                    recipient.encryptedKeyPath().toString(),
+                    "frase-recipient-teste".toCharArray(), 6004),
+                    "certificado ausente registra MID 6004");
+            check(registrationFailsWith(banco, adminUid,
+                    raiz.resolve("recipient-test-x509.crt").toString(),
+                    raiz.resolve("chave-ausente.key").toString(),
+                    "frase-recipient-teste".toCharArray(), 6005),
+                    "chave ausente registra MID 6005");
+            check(registrationFailsWith(banco, adminUid,
+                    raiz.resolve("recipient-test-x509.crt").toString(),
+                    recipient.encryptedKeyPath().toString(),
+                    "frase-incorreta".toCharArray(), 6006),
+                    "frase incorreta registra MID 6006");
+            check(registrationFailsWith(banco, adminUid,
+                    raiz.resolve("recipient-test-x509.crt").toString(),
+                    owner.encryptedKeyPath().toString(),
+                    "frase-owner-teste".toCharArray(), 6007),
+                    "par chave/certificado incompatível registra MID 6007");
+
+            banco.logEvent(1001, null, null);
+            banco.logEvent(1006, null, null);
+            check(hasLogSuffix(banco, 1001, 1006),
+                    "execução com usuários registra partida normal");
+            check(CryptoUtils.proveKeyPair(DigitalVault.verifyStoredKey(
+                    banco.findKeyEntry(adminUid), "frase-admin-teste".toCharArray()),
+                    admin.certificate().getPublicKey(), 10_240),
+                    "segunda execução valida a chave do administrador");
+            boolean adminInvalidoRecusado = false;
+            try {
+                DigitalVault.verifyStoredKey(banco.findKeyEntry(adminUid),
+                        "frase-incorreta".toCharArray());
+            } catch (Exception expected) {
+                adminInvalidoRecusado = banco.countUsers() == 3;
+            }
+            check(adminInvalidoRecusado,
+                    "frase inválida do administrador encerra a prova sem reinicializar usuários");
+
+            DigitalVault.LoginResult loginInexistente = DigitalVault.identifyUser(
+                    banco, "ausente@teste.local");
+            DigitalVault.LoginResult loginValido = DigitalVault.identifyUser(
+                    banco, recipient.email());
+            check(loginInexistente.eventCode() == 2005 && loginInexistente.user() == null
+                    && loginValido.eventCode() == 2003
+                    && loginValido.user().uid() == recipientUid
+                    && hasLogSuffix(banco, 2005, 2003, 2002),
+                    "etapa 1 distingue login inexistente e acesso liberado com MIDs oficiais");
 
             Database.KeyEntry chaveDestinatario = banco.findKeyEntry(recipientUid);
             PrivateKey chaveComprovada = DigitalVault.verifyStoredKey(chaveDestinatario,
@@ -438,6 +603,9 @@ public class Tests {
             }
             check(fraseAdminRecusada,
                     "frase retida do administrador não substitui a prova do usuário");
+            check(DigitalVault.EXIT_MESSAGE.equals("Pressione o botão Encerrar Sessão ou o botão "
+                    + "Encerrar Sistema para confirmar."),
+                    "tela de saída usa a frase exata do enunciado");
 
             createVault(pastaVault, admin, owner, recipient);
             banco.incrementAccessCount(recipientUid);
@@ -677,11 +845,21 @@ public class Tests {
                 Files.deleteIfExists(envelopeDois);
             }
 
-            check(banco.recordPasswordFailure(recipientUid) == 1
-                    && banco.recordPasswordFailure(recipientUid) == 2
-                    && banco.recordPasswordFailure(recipientUid) == 3
-                    && banco.findUser(recipientUid).lockedUntil() > System.currentTimeMillis(),
-                    "bloqueio persistente após três erros");
+            banco.logEvent(3001, recipientUid, null);
+            check(DigitalVault.recordPasswordFailure(banco, recipientUid) == 1
+                    && DigitalVault.recordPasswordFailure(banco, recipientUid) == 2,
+                    "primeiro e segundo erros de PIN são consecutivos");
+            DigitalVault.recordPasswordSuccess(banco, recipientUid);
+            check(banco.findUser(recipientUid).passwordFailures() == 0
+                    && hasLogSuffix(banco, 3004, 3005, 3003, 3002),
+                    "PIN correto reinicia o contador e encerra a etapa 2");
+            banco.logEvent(3001, recipientUid, null);
+            check(DigitalVault.recordPasswordFailure(banco, recipientUid) == 1
+                    && DigitalVault.recordPasswordFailure(banco, recipientUid) == 2
+                    && DigitalVault.recordPasswordFailure(banco, recipientUid) == 3
+                    && banco.findUser(recipientUid).lockedUntil() > System.currentTimeMillis()
+                    && hasLogSuffix(banco, 3004, 3005, 3006, 3007, 3002),
+                    "terceiro erro de PIN bloqueia e registra os MIDs da etapa 2");
             long bloqueio = banco.findUser(recipientUid).lockedUntil()
                     - System.currentTimeMillis();
             check(bloqueio > 115_000L && bloqueio <= 120_000L, "bloqueio de 120 segundos");
@@ -689,6 +867,14 @@ public class Tests {
                 check(reaberto.findUser(recipientUid).lockedUntil() == banco.findUser(recipientUid).lockedUntil(),
                         "bloqueio persiste após reabrir o banco");
             }
+            DigitalVault.LoginResult loginBloqueado = DigitalVault.identifyUser(
+                    banco, recipient.email());
+            DigitalVault.LoginResult outroUsuario = DigitalVault.identifyUser(
+                    banco, admin.email());
+            check(loginBloqueado.eventCode() == 2004
+                    && outroUsuario.eventCode() == 2003
+                    && hasLogSuffix(banco, 2004, 2003, 2002),
+                    "conta bloqueada volta à etapa 1 sem impedir outro usuário");
             try (var conexao = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
                     var statement = conexao.prepareStatement(
                             "UPDATE Usuarios SET bloqueado_ate=? WHERE uid=?")) {
@@ -696,9 +882,11 @@ public class Tests {
                 statement.setLong(2, recipientUid);
                 statement.executeUpdate();
             }
-            banco.clearExpiredLock(recipientUid);
-            check(banco.findUser(recipientUid).lockedUntil() == 0,
-                    "bloqueio vencido é liberado");
+            DigitalVault.LoginResult loginLiberado = DigitalVault.identifyUser(
+                    banco, recipient.email());
+            check(loginLiberado.eventCode() == 2003
+                    && banco.findUser(recipientUid).lockedUntil() == 0,
+                    "bloqueio vencido é liberado pela etapa 1");
             boolean duplicadoRecusado = false;
             try {
                 insertTestUser(banco, recipient, Database.USER_GROUP_ID,
@@ -718,12 +906,32 @@ public class Tests {
             }
             check(grupoInvalidoRecusado, "grupo inválido desfaz cadastro por transação");
             long ownerUid = banco.findUser(owner.email()).uid();
-            check(banco.recordTokenFailure(ownerUid) == 1
-                    && banco.recordTokenFailure(ownerUid) == 2
-                    && banco.recordTokenFailure(ownerUid) == 3
+            banco.logEvent(4001, ownerUid, null);
+            check(DigitalVault.recordTokenFailure(banco, ownerUid) == 1
+                    && DigitalVault.recordTokenFailure(banco, ownerUid) == 2,
+                    "primeiro e segundo erros de TOTP são consecutivos");
+            DigitalVault.recordAuthenticationSuccess(banco, ownerUid);
+            check(banco.findUser(ownerUid).tokenFailures() == 0
+                    && banco.findUser(ownerUid).accessCount() == 1
+                    && hasLogSuffix(banco, 4004, 4005, 4003, 4002, 1003),
+                    "TOTP correto reinicia contador e inicia a sessão após os dois fatores");
+            banco.logEvent(4001, ownerUid, null);
+            check(DigitalVault.recordTokenFailure(banco, ownerUid) == 1
+                    && DigitalVault.recordTokenFailure(banco, ownerUid) == 2
+                    && DigitalVault.recordTokenFailure(banco, ownerUid) == 3
                     && banco.findUser(ownerUid).lockedUntil() > System.currentTimeMillis()
-                    && banco.findUser(recipientUid).lockedUntil() == 0,
-                    "três erros de token bloqueiam só a conta correspondente");
+                    && banco.findUser(recipientUid).lockedUntil() == 0
+                    && hasLogSuffix(banco, 4004, 4005, 4006, 4007, 4002),
+                    "terceiro erro de TOTP bloqueia só a conta e registra os MIDs da etapa 3");
+            banco.logEvent(8002, ownerUid, null);
+            DigitalVault.recordSessionEnd(banco, banco.findUser(ownerUid));
+            check(hasLogSuffix(banco, 8002, 1004),
+                    "encerramento de sessão registra MIDs 8002 e 1004");
+            banco.logEvent(8003, ownerUid, null);
+            DigitalVault.recordSessionEnd(banco, banco.findUser(ownerUid));
+            banco.logEvent(1002, null, null);
+            check(hasLogSuffix(banco, 8003, 1004, 1002),
+                    "encerramento do sistema registra sessão antes do MID 1002");
             banco.logEvent(7015, recipientUid, "shared.txt");
             List<Database.LogEntry> logs = banco.listLogs();
             Database.LogEntry ultimo = logs.get(logs.size() - 1);
@@ -731,12 +939,15 @@ public class Tests {
                     && recipient.email().equals(ultimo.login())
                     && ultimo.message().contains("<arq_name>"),
                     "registro guarda MID, usuário e arquivo; texto vem de Mensagens");
+        }
+
+        Path orderDatabase = raiz.resolve("order-test.db");
+        try (Database banco = new Database(orderDatabase)) {
             banco.logEvent(1001, null, null);
             banco.logEvent(1002, null, null);
             banco.logEvent(1006, null, null);
         }
-
-        try (var conexao = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+        try (var conexao = DriverManager.getConnection("jdbc:sqlite:" + orderDatabase);
                 var statement = conexao.prepareStatement(
                         "UPDATE Registros SET data_hora=? WHERE mid=?")) {
             statement.setLong(1, 2_000L);
@@ -749,7 +960,7 @@ public class Tests {
             statement.setInt(2, 1006);
             statement.executeUpdate();
         }
-        try (Database banco = new Database(databaseFile)) {
+        try (Database banco = new Database(orderDatabase)) {
             List<Database.LogEntry> registros = banco.listLogs();
             check(registros.get(0).eventCode() == 1002
                     && registros.get(1).eventCode() == 1006
@@ -809,6 +1020,47 @@ public class Tests {
             Files.write(assinatura, assinaturaOriginal);
         }
         check(aceitou == deveAceitar, descricao);
+    }
+
+    private static Map<Integer, String> readMessages(Path databaseFile) throws Exception {
+        Map<Integer, String> messages = new java.util.TreeMap<>();
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+                var statement = connection.createStatement();
+                var result = statement.executeQuery(
+                        "SELECT mid,texto FROM Mensagens ORDER BY mid")) {
+            while (result.next()) {
+                messages.put(result.getInt(1), result.getString(2));
+            }
+        }
+        return messages;
+    }
+
+    private static boolean hasLogSuffix(Database database, int... eventCodes) throws Exception {
+        List<Database.LogEntry> logs = database.listLogs();
+        if (logs.size() < eventCodes.length) {
+            return false;
+        }
+        int offset = logs.size() - eventCodes.length;
+        for (int i = 0; i < eventCodes.length; i++) {
+            if (logs.get(offset + i).eventCode() != eventCodes[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean registrationFailsWith(Database database, long actorUid,
+            String certificatePath, String privateKeyPath, char[] passphrase, int expectedMid)
+            throws Exception {
+        try {
+            DigitalVault.loadRegistrationMaterial(database, actorUid,
+                    certificatePath, privateKeyPath, passphrase);
+            return false;
+        } catch (Exception expected) {
+            return hasLogSuffix(database, expectedMid);
+        } finally {
+            CryptoUtils.clear(passphrase);
+        }
     }
 
     private static long insertTestUser(Database banco, Identity identidade, int grupo,

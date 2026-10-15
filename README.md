@@ -107,7 +107,7 @@ Ou, usando CMake:
 cmake --build cmake-build --target run_tests
 ```
 
-Esses testes concluíram 109 verificações envolvendo Base32, TOTP, bcrypt,
+Esses testes concluíram 133 verificações envolvendo Base32, TOTP, bcrypt,
 PKCS#8, AES, RSA, banco de dados, permissões, compartilhamento, adulterações,
 bloqueio e ordem cronológica dos registros.
 

@@ -101,7 +101,8 @@ public class Database implements AutoCloseable {
             grupo.executeUpdate();
         }
         try (PreparedStatement mensagem = conexao.prepareStatement(
-                "INSERT OR IGNORE INTO Mensagens(mid, texto) VALUES(?, ?)")) {
+                "INSERT INTO Mensagens(mid, texto) VALUES(?, ?) "
+                        + "ON CONFLICT(mid) DO UPDATE SET texto=excluded.texto")) {
             for (Map.Entry<Integer, String> item : officialMessages().entrySet()) {
                 mensagem.setInt(1, item.getKey());
                 mensagem.setString(2, item.getValue());
