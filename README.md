@@ -30,7 +30,7 @@ administrador para consultar os registros de auditoria em ordem cronológica.
 
 ## Compilação e execução
 
-O projeto requer Java JDK, SQLite JDBC e BouncyCastle. Os arquivos JAR
+O projeto requer Java JDK, SQLite JDBC, BouncyCastle e ZXing Core. Os arquivos JAR
 necessários estão na pasta `lib`.
 
 Execute os comandos a partir da raiz do projeto. Caso prefira usar o CMake, é
@@ -47,7 +47,7 @@ Para compilar diretamente pelo PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force build
-javac -encoding UTF-8 -cp "lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" -d build src\*.java tests\Tests.java
+javac -encoding UTF-8 -cp "lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" -d build src\*.java tests\Tests.java
 ```
 
 Ou, usando CMake:
@@ -61,7 +61,7 @@ cmake --build cmake-build
 Para executar diretamente pelo PowerShell:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" DigitalVault
+java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" DigitalVault
 ```
 
 Ou, usando CMake:
@@ -75,19 +75,22 @@ Para selecionar outro banco de dados, informe seu caminho como primeiro
 argumento:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" DigitalVault caminho-do-banco.db
+java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" DigitalVault caminho-do-banco.db
 ```
 
 O total de acessos aumenta após o login completo, e o total de consultas aumenta
 quando o botão Listar conclui a consulta com sucesso.
+
+Após um cadastro, a aplicação mostra o segredo Base32 e um QR Code local para
+provisionar a conta no Google Authenticator.
 
 O visualizador de logs deve ser aberto em um terminal, pois lê a frase secreta
 sem mostrá-la na tela. Informe o caminho da chave privada do administrador e,
 se necessário, o caminho do banco de dados:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" LogView caminho-da-chave.key
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" LogView caminho-da-chave.key caminho-do-banco.db
+java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" LogView caminho-da-chave.key
+java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" LogView caminho-da-chave.key caminho-do-banco.db
 ```
 
 ## Testes
@@ -98,7 +101,7 @@ em `tests/additional-data`.
 Para executar o teste diretamente pelo PowerShell:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" Tests
+java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" Tests
 ```
 
 Ou, usando CMake:
@@ -107,7 +110,7 @@ Ou, usando CMake:
 cmake --build cmake-build --target run_tests
 ```
 
-Esses testes concluíram 149 verificações envolvendo Base32, TOTP, bcrypt,
+Esses testes concluíram 152 verificações envolvendo Base32, QR Code, TOTP, bcrypt,
 PKCS#8, AES, RSA, banco de dados, permissões, compartilhamento, adulterações,
 bloqueio e ordem cronológica dos registros.
 
@@ -117,7 +120,7 @@ terminal sem serem exibidas.
 Para executar diretamente pelo PowerShell:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar" Tests --package-t3
+java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" Tests --package-t3
 ```
 
 Ou, usando CMake:

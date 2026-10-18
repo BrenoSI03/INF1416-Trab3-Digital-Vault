@@ -85,6 +85,32 @@ public class Tests {
             zeroInicialValidado = codigo.startsWith("0") && totpComZero.validateCode(codigo);
         }
         check(zeroInicialValidado, "TOTP iniciado por zero é validado com seis dígitos");
+
+        String otpAuthUri = DigitalVault.createOtpAuthUri(
+                "user+test@example.com", "JBSWY3DPEHPK3PXP");
+        check(("otpauth://totp/Cofre%20Digital:user%2Btest@example.com"
+                + "?secret=JBSWY3DPEHPK3PXP").equals(otpAuthUri),
+                "URI otpauth contém conta e segredo codificados");
+        var qrCode = DigitalVault.createQrCode(otpAuthUri, 180);
+        boolean hasBlack = false;
+        boolean hasWhite = false;
+        for (int y = 0; y < qrCode.getHeight(); y++) {
+            for (int x = 0; x < qrCode.getWidth(); x++) {
+                int color = qrCode.getRGB(x, y) & 0xFFFFFF;
+                hasBlack |= color == 0x000000;
+                hasWhite |= color == 0xFFFFFF;
+            }
+        }
+        check(qrCode.getWidth() == 180 && qrCode.getHeight() == 180
+                && hasBlack && hasWhite, "QR Code TOTP gerado localmente");
+        int[] pixels = qrCode.getRGB(0, 0, qrCode.getWidth(), qrCode.getHeight(),
+                null, 0, qrCode.getWidth());
+        var source = new com.google.zxing.RGBLuminanceSource(
+                qrCode.getWidth(), qrCode.getHeight(), pixels);
+        var bitmap = new com.google.zxing.BinaryBitmap(
+                new com.google.zxing.common.HybridBinarizer(source));
+        String decodedUri = new com.google.zxing.qrcode.QRCodeReader().decode(bitmap).getText();
+        check(otpAuthUri.equals(decodedUri), "QR Code preserva exatamente a URI otpauth");
     }
 
     private static void testBasicCryptography() throws Exception {

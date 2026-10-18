@@ -8,6 +8,8 @@ set(BOUNCY_CASTLE_JAR
     "${CMAKE_SOURCE_DIR}/lib/bcprov-jdk18on-1.80.2.jar")
 set(SQLITE_JDBC_JAR
     "${CMAKE_SOURCE_DIR}/lib/sqlite-jdbc-3.41.2.2.jar")
+set(ZXING_CORE_JAR
+    "${CMAKE_SOURCE_DIR}/lib/core-3.5.4.jar")
 
 if(NOT EXISTS "${BOUNCY_CASTLE_JAR}")
     message(FATAL_ERROR "BouncyCastle JAR not found: ${BOUNCY_CASTLE_JAR}")
@@ -17,6 +19,10 @@ if(NOT EXISTS "${SQLITE_JDBC_JAR}")
     message(FATAL_ERROR "SQLite JDBC JAR not found: ${SQLITE_JDBC_JAR}")
 endif()
 
+if(NOT EXISTS "${ZXING_CORE_JAR}")
+    message(FATAL_ERROR "ZXing Core JAR not found: ${ZXING_CORE_JAR}")
+endif()
+
 if(WIN32)
     set(CLASSPATH_SEPARATOR ";")
 else()
@@ -24,7 +30,7 @@ else()
 endif()
 
 set(DEPENDENCY_CLASSPATH
-    "${BOUNCY_CASTLE_JAR}${CLASSPATH_SEPARATOR}${SQLITE_JDBC_JAR}")
+    "${BOUNCY_CASTLE_JAR}${CLASSPATH_SEPARATOR}${SQLITE_JDBC_JAR}${CLASSPATH_SEPARATOR}${ZXING_CORE_JAR}")
 set(CLASS_DIRECTORY "${CMAKE_BINARY_DIR}/classes")
 set(RUNTIME_CLASSPATH
     "${CLASS_DIRECTORY}${CLASSPATH_SEPARATOR}${DEPENDENCY_CLASSPATH}")
@@ -50,6 +56,7 @@ add_custom_command(
             "${TEST_SOURCE}"
             "${BOUNCY_CASTLE_JAR}"
             "${SQLITE_JDBC_JAR}"
+            "${ZXING_CORE_JAR}"
     COMMENT "Compiling Digital Vault Java sources"
     VERBATIM
 )

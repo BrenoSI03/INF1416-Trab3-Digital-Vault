@@ -7,6 +7,8 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.awt.image.BufferedImage;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,6 +24,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import javax.swing.BorderFactory;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
@@ -41,6 +44,12 @@ import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.EncodeHintType;
+import com.google.zxing.WriterException;
+import com.google.zxing.qrcode.QRCodeWriter;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 
 public class DigitalVault {
     static final String EXIT_MESSAGE = "Pressione o botão Encerrar Sessão ou o botão "
@@ -616,10 +625,10 @@ public class DigitalVault {
                 String hash = CryptoUtils.generateBcrypt(password);
                 int gid = initial || groupBox.getSelectedIndex() == 0
                         ? Database.ADMIN_GROUP_ID : Database.USER_GROUP_ID;
+                JPanel totpPanel = createTotpSetupPanel(email, base32);
                 database.insertUser(name, email, gid, UUID.randomUUID().toString(), hash,
                         encryptedSecret, material.certificatePem(), material.encryptedPrivateKey());
-                JOptionPane.showMessageDialog(window,
-                        "Usuário cadastrado. Segredo Base32 para o Google Authenticator:\n" + base32,
+                JOptionPane.showMessageDialog(window, totpPanel,
                         "Cadastro concluído", JOptionPane.INFORMATION_MESSAGE);
                 clearFields(certificateField, keyField, passphraseField, passwordField,
                         confirmationField);
@@ -650,6 +659,53 @@ public class DigitalVault {
 
     static boolean canRegisterUser(Database.User user) {
         return user != null && user.isAdministrator();
+    }
+
+    static String createOtpAuthUri(String email, String base32Secret) {
+        String issuer = urlEncode("Cofre Digital");
+        String account = urlEncode(email).replace("%40", "@");
+        return "otpauth://totp/" + issuer + ":" + account + "?secret=" + base32Secret;
+    }
+
+    static BufferedImage createQrCode(String content, int size) throws WriterException {
+        var hints = java.util.Map.of(
+                EncodeHintType.CHARACTER_SET, StandardCharsets.UTF_8.name(),
+                EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M,
+                EncodeHintType.MARGIN, 2);
+        BitMatrix matrix = new QRCodeWriter().encode(
+                content, BarcodeFormat.QR_CODE, size, size, hints);
+        BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                image.setRGB(x, y, matrix.get(x, y) ? 0x000000 : 0xFFFFFF);
+            }
+        }
+        return image;
+    }
+
+    private static JPanel createTotpSetupPanel(String email, String base32Secret)
+            throws WriterException {
+        String otpAuthUri = createOtpAuthUri(email, base32Secret);
+        JLabel qrCode = new JLabel(new ImageIcon(createQrCode(otpAuthUri, 260)));
+        qrCode.setHorizontalAlignment(JLabel.CENTER);
+
+        JTextField secretField = new JTextField(base32Secret);
+        secretField.setEditable(false);
+        secretField.setHorizontalAlignment(JTextField.CENTER);
+
+        JPanel text = new JPanel(new GridLayout(0, 1, 0, 4));
+        text.add(new JLabel("Usuário cadastrado. Escaneie o QR Code no Google Authenticator."));
+        text.add(new JLabel("Se necessário, informe manualmente o segredo Base32:"));
+        text.add(secretField);
+
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.add(text, BorderLayout.NORTH);
+        panel.add(qrCode, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private static String urlEncode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
     }
 
     static boolean isPasswordValid(char[] password) {
