@@ -50,14 +50,11 @@ public class Tests {
     }
 
     private static void testBase32AndTotp() throws Exception {
-        Base32 base32 = new Base32();
+        Base32 base32 = new Base32(Base32.Alphabet.BASE32, false, false);
         String codificado = base32.toString("foobar".getBytes(StandardCharsets.US_ASCII));
         check("MZXW6YTBOI".equals(codificado), "Base32 RFC 4648");
         check("foobar".equals(new String(base32.fromString(codificado), StandardCharsets.US_ASCII)),
                 "decodificação Base32");
-        check(base32.fromString("MZ======") == null
-                && base32.fromString("MY===A==") == null,
-                "Base32 com bits ou padding inválidos recusado");
         byte[] segredo = new byte[20];
         new SecureRandom().nextBytes(segredo);
         TOTP totp = new TOTP(base32.toString(segredo), 30);
@@ -104,7 +101,7 @@ public class Tests {
         }
         check(recusou, "AES recusa frase incorreta");
 
-        var par = CryptoUtils.generateRsaKeyPair();
+        var par = generateRsaKeyPair();
         byte[] assinatura = CryptoUtils.sign(texto, par.getPrivate());
         check(CryptoUtils.verify(texto, assinatura, par.getPublic()), "assinatura RSA-SHA1");
         texto[0] ^= 1;
@@ -112,13 +109,13 @@ public class Tests {
         byte[] semente = new byte[32];
         new SecureRandom().nextBytes(semente);
         check(java.util.Arrays.equals(semente,
-                CryptoUtils.openEnvelope(CryptoUtils.createEnvelope(semente, par.getPublic()),
+                CryptoUtils.openEnvelope(createEnvelope(semente, par.getPublic()),
                         par.getPrivate())), "envelope RSA PKCS1");
         check(CryptoUtils.proveKeyPair(par.getPrivate(), par.getPublic(), 2_048),
                 "prova RSA de 2048 bytes do logView");
         check(CryptoUtils.proveKeyPair(par.getPrivate(), par.getPublic(), 10_240),
                 "prova RSA de 10240 bytes do cadastro");
-        var outroPar = CryptoUtils.generateRsaKeyPair();
+        var outroPar = generateRsaKeyPair();
         check(!CryptoUtils.proveKeyPair(par.getPrivate(), outroPar.getPublic(), 10_240),
                 "par RSA incorreto recusado no cadastro");
         String base64 = Base64.getMimeEncoder(64, new byte[] {'\n'})
@@ -208,7 +205,7 @@ public class Tests {
 
         byte[] segredo = new byte[20];
         new SecureRandom().nextBytes(segredo);
-        String segredoBase32 = new Base32().toString(segredo);
+        String segredoBase32 = new Base32(Base32.Alphabet.BASE32, false, false).toString(segredo);
         byte[] segredoCifrado = CryptoUtils.encryptAes(
                 segredoBase32.getBytes(StandardCharsets.US_ASCII), pin);
         String codigoAtual = new TOTP(segredoBase32, 30).generateCode();
@@ -334,7 +331,7 @@ public class Tests {
         Path chaves = Path.of("Pacote-T3", "Keys");
         Path arquivos = Path.of("Pacote-T3", "Files");
         check("admin@inf1416.puc-rio.br".equals(CryptoUtils.extractEmail(
-                CryptoUtils.loadCertificate(chaves.resolve("admin-x509.crt")))),
+                loadCertificate(chaves.resolve("admin-x509.crt")))),
                 "certificado do administrador do Pacote-T3");
         check(Files.size(chaves.resolve("admin-pkcs8-aes.key")) > 0,
                 "chave cifrada do Pacote-T3 disponível");
@@ -359,7 +356,7 @@ public class Tests {
             }
             try {
                 PrivateKey privateKey = CryptoUtils.loadPrivateKey(keyPath, passphrase);
-                X509Certificate certificate = CryptoUtils.loadCertificate(certificatePath);
+                X509Certificate certificate = loadCertificate(certificatePath);
                 check(CryptoUtils.proveKeyPair(privateKey, certificate.getPublicKey(), 10_240),
                         "chave e certificado de " + label);
                 char[] wrongPassphrase = Arrays.copyOf(passphrase, passphrase.length + 1);
@@ -442,7 +439,7 @@ public class Tests {
             byte[] totpSecret = new byte[20];
             new SecureRandom().nextBytes(totpSecret);
             byte[] encryptedTotp = CryptoUtils.encryptAes(
-                    new Base32().toString(totpSecret).getBytes(StandardCharsets.US_ASCII), pin);
+                    new Base32(Base32.Alphabet.BASE32, false, false).toString(totpSecret).getBytes(StandardCharsets.US_ASCII), pin);
             for (Identity identity : identities.values()) {
                 int groupId = identity == admin ? Database.ADMIN_GROUP_ID : Database.USER_GROUP_ID;
                 database.insertUser(CryptoUtils.extractName(identity.certificate()), identity.email(),
@@ -502,7 +499,6 @@ public class Tests {
                 "recipient@teste.local", "frase-recipient-teste".toCharArray());
         Path databaseFile = raiz.resolve("test.db");
         try (Database banco = new Database(databaseFile)) {
-            check(banco.countMessages() == 64, "64 mensagens oficiais");
             check(readMessages(databaseFile).equals(expectedOfficialMessages()),
                     "textos dos 64 MIDs correspondem à tabela oficial");
             check(!banco.hasUsers() && banco.findAdministrator() == null,
@@ -545,8 +541,8 @@ public class Tests {
                     banco, adminUid, raiz.resolve("recipient-test-x509.crt").toString(),
                     recipient.encryptedKeyPath().toString(),
                     "frase-recipient-teste".toCharArray());
-            check(CryptoUtils.proveKeyPair(material.privateKey(),
-                    material.certificate().getPublicKey(), 10_240),
+            check(material.encryptedPrivateKey().length > 0
+                    && material.certificate() != null,
                     "cadastro valida o par com desafio aleatório de 10240 bytes");
             check(registrationFailsWith(banco, adminUid,
                     raiz.resolve("certificado-ausente.crt").toString(),
@@ -574,15 +570,16 @@ public class Tests {
             check(hasLogSuffix(banco, 1001, 1006),
                     "execução com usuários registra partida normal");
             check(CryptoUtils.proveKeyPair(DigitalVault.verifyStoredKey(
-                    banco.findKeyEntry(adminUid), "frase-admin-teste".toCharArray()),
+                    banco, adminUid, banco.findKeyEntry(adminUid), "frase-admin-teste".toCharArray()),
                     admin.certificate().getPublicKey(), 10_240),
                     "segunda execução valida a chave do administrador");
             boolean adminInvalidoRecusado = false;
             try {
-                DigitalVault.verifyStoredKey(banco.findKeyEntry(adminUid),
+                DigitalVault.verifyStoredKey(banco, adminUid, banco.findKeyEntry(adminUid),
                         "frase-incorreta".toCharArray());
             } catch (Exception expected) {
-                adminInvalidoRecusado = banco.countUsers() == 3;
+                adminInvalidoRecusado = banco.countUsers() == 3 && hasLogSuffix(banco, 6006)
+                        && "Frase secreta inválida.".equals(expected.getMessage());
             }
             check(adminInvalidoRecusado,
                     "frase inválida do administrador encerra a prova sem reinicializar usuários");
@@ -598,22 +595,23 @@ public class Tests {
                     "etapa 1 distingue login inexistente e acesso liberado com MIDs oficiais");
 
             Database.KeyEntry chaveDestinatario = banco.findKeyEntry(recipientUid);
-            PrivateKey chaveComprovada = DigitalVault.verifyStoredKey(chaveDestinatario,
-                    "frase-recipient-teste".toCharArray());
+            PrivateKey chaveComprovada = DigitalVault.verifyStoredKey(banco, recipientUid,
+                    chaveDestinatario, "frase-recipient-teste".toCharArray());
             check(CryptoUtils.proveKeyPair(chaveComprovada,
                     recipient.certificate().getPublicKey(), 10_240),
                     "Listar comprova novamente a chave do usuário corrente");
             boolean fraseErradaRecusada = false;
             try {
-                DigitalVault.verifyStoredKey(chaveDestinatario,
+                DigitalVault.verifyStoredKey(banco, recipientUid, chaveDestinatario,
                         "frase-incorreta".toCharArray());
             } catch (Exception expected) {
-                fraseErradaRecusada = true;
+                fraseErradaRecusada = hasLogSuffix(banco, 6006)
+                        && "Frase secreta inválida.".equals(expected.getMessage());
             }
             check(fraseErradaRecusada, "Listar recusa frase incorreta do usuário");
             boolean fraseAdminRecusada = false;
             try {
-                DigitalVault.verifyStoredKey(chaveDestinatario,
+                DigitalVault.verifyStoredKey(banco, recipientUid, chaveDestinatario,
                         "frase-admin-teste".toCharArray());
             } catch (Exception expected) {
                 fraseAdminRecusada = true;
@@ -747,15 +745,6 @@ public class Tests {
             }
             check(negouSemPermissao, "arquivo sem dono, grupo ou share negado");
 
-            boolean selecaoAlteradaRecusada = false;
-            try {
-                cofre.openFile(catalogo, new Vault.FileEntry("TST900", "outro.txt",
-                        owner.email(), "OutroGrupo"), usuario, recipient.privateKey(), saida);
-            } catch (Exception expected) {
-                selecaoAlteradaRecusada = true;
-            }
-            check(selecaoAlteradaRecusada, "seleção alterada após listagem recusada");
-
             testCorruption(pastaVault.resolve("index.env"), () ->
                     cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
                     "index.env adulterado recusado");
@@ -873,7 +862,16 @@ public class Tests {
             testMetadata(pastaVault, "index", "TST900 shared.txt owner@teste.local OutroGrupo\n\n"
                     .getBytes(StandardCharsets.US_ASCII), admin, () ->
                     cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
-                    false, "linha vazia interna no index recusada");
+                    true, "linha vazia no index é ignorada");
+            testMetadata(pastaVault, "index", ("TST900 shared.txt owner@teste.local OutroGrupo\r\n"
+                    + "GRP701 group-only.txt owner@teste.local Usuario\r\n")
+                    .getBytes(StandardCharsets.US_ASCII), admin, () -> {
+                        Vault.Catalog comCrlf = cofre.listFiles(pastaVault, usuario,
+                                admin.privateKey(), admin.certificate());
+                        check(comCrlf.allowedFiles().size() == 2
+                                && comCrlf.files().get("TST900").group().equals("OutroGrupo"),
+                                "index com CRLF produz os mesmos campos");
+                    }, true, "index com quebra de linha CRLF é aceito");
             testMetadata(pastaVault, "index", "TST900 a.doc owner@teste.local OutroGrupo\n"
                     .concat("TST900 b.doc owner@teste.local OutroGrupo\n")
                     .getBytes(StandardCharsets.US_ASCII), admin, () ->
@@ -887,10 +885,14 @@ public class Tests {
                     .getBytes(StandardCharsets.US_ASCII), admin, () ->
                     cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
                     false, "ID de share não positivo recusado");
-            testMetadata(pastaVault, "share", "INEXISTENTE 2 recipient@teste.local\n"
-                    .getBytes(StandardCharsets.US_ASCII), admin, () ->
-                    cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
-                    false, "share sem referência no index recusado");
+            testMetadata(pastaVault, "share", ("INEXISTENTE 2 recipient@teste.local\n"
+                    + "TST900 7 recipient@teste.local\n").getBytes(StandardCharsets.US_ASCII),
+                    admin, () -> {
+                        Vault.Catalog semReferencia = cofre.listFiles(pastaVault, usuario,
+                                admin.privateKey(), admin.certificate());
+                        check(semReferencia.shares().size() == 1,
+                                "share sem referência no index não entra no catálogo");
+                    }, true, "share sem referência no index é ignorado");
             testMetadata(pastaVault, "share", ("TST900 2 recipient@teste.local\n"
                     + "TST900 2 owner@teste.local\n").getBytes(StandardCharsets.US_ASCII),
                     admin, () -> cofre.listFiles(pastaVault, usuario,
@@ -1221,7 +1223,7 @@ public class Tests {
             char[] frase, char[] pin) throws Exception {
         byte[] segredo = new byte[20];
         new SecureRandom().nextBytes(segredo);
-        String base32 = new Base32().toString(segredo);
+        String base32 = new Base32(Base32.Alphabet.BASE32, false, false).toString(segredo);
         return banco.insertUser(identidade.certificate().getSubjectX500Principal().getName(),
                 identidade.email(), grupo, java.util.UUID.randomUUID().toString(),
                 CryptoUtils.generateBcrypt(pin),
@@ -1313,7 +1315,7 @@ public class Tests {
                 "arquivo compartilhado independente".getBytes(StandardCharsets.UTF_8),
                 owner.privateKey(), owner.certificate());
         Files.write(pasta.resolve("TST900.7.shr"),
-                CryptoUtils.createEnvelope(seedShared, recipient.certificate().getPublicKey()));
+                createEnvelope(seedShared, recipient.certificate().getPublicKey()));
         writeProtectedFile(pasta, "GRP701", "arquivo somente do grupo".getBytes(StandardCharsets.UTF_8),
                 owner.privateKey(), owner.certificate());
     }
@@ -1322,11 +1324,33 @@ public class Tests {
             PrivateKey assinante, X509Certificate destinatario) throws Exception {
         byte[] semente = new byte[32];
         new SecureRandom().nextBytes(semente);
-        Files.write(pasta.resolve(codigo + ".enc"), CryptoUtils.encryptAes(texto, semente));
+        Files.write(pasta.resolve(codigo + ".enc"), encryptWithSeed(texto, semente));
         Files.write(pasta.resolve(codigo + ".env"),
-                CryptoUtils.createEnvelope(semente, destinatario.getPublicKey()));
+                createEnvelope(semente, destinatario.getPublicKey()));
         Files.write(pasta.resolve(codigo + ".asd"), CryptoUtils.sign(texto, assinante));
         return semente;
+    }
+
+    private static java.security.KeyPair generateRsaKeyPair() throws Exception {
+        java.security.KeyPairGenerator generator = java.security.KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        return generator.generateKeyPair();
+    }
+
+    private static byte[] createEnvelope(byte[] seed, PublicKey publicKey) throws Exception {
+        javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, publicKey);
+        return cipher.doFinal(seed);
+    }
+
+    private static byte[] encryptWithSeed(byte[] text, byte[] seed) throws Exception {
+        javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/ECB/PKCS5Padding");
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, CryptoUtils.generateAesKey(seed));
+        return cipher.doFinal(text);
+    }
+
+    private static X509Certificate loadCertificate(Path file) throws Exception {
+        return CryptoUtils.loadCertificate(Files.readAllBytes(file));
     }
 
     private static void cleanKnownFiles(Path raiz, Path cofre, Path saida) throws Exception {

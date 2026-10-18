@@ -1,7 +1,10 @@
 import java.awt.BorderLayout;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.nio.charset.StandardCharsets;
@@ -14,6 +17,7 @@ import java.sql.SQLException;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
@@ -45,24 +49,27 @@ public class DigitalVault {
     }
 
     record RegistrationMaterial(X509Certificate certificate, byte[] certificatePem,
-            byte[] encryptedPrivateKey, PrivateKey privateKey) {
+            byte[] encryptedPrivateKey) {
     }
 
-    private final Database banco;
-    private final Vault cofre;
-    private final JFrame janela = new JFrame("Cofre Digital");
-    private char[] fraseAdministrador;
-    private Database.User usuarioAtual;
-    private char[] senhaComprovada;
-    private boolean encerrado;
+    private final Database database;
+    private final Vault vault;
+    private final JFrame window = new JFrame("Cofre Digital");
+    private char[] adminPassphrase;
+    private Database.User currentUser;
+    private char[] verifiedPassword;
+    private boolean sessionStarted;
+    private boolean closed;
+    private Vault.Catalog currentCatalog;
+    private PrivateKey queryPrivateKey;
 
     public DigitalVault(Path databaseFile) throws Exception {
-        banco = new Database(databaseFile);
-        cofre = new Vault(banco);
-        janela.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
-        janela.setMinimumSize(new Dimension(720, 520));
-        janela.setLocationRelativeTo(null);
-        janela.addWindowListener(new WindowAdapter() {
+        database = new Database(databaseFile);
+        vault = new Vault(database);
+        window.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        window.setMinimumSize(new Dimension(720, 520));
+        window.setLocationRelativeTo(null);
+        window.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent event) {
                 shutDown();
@@ -73,8 +80,8 @@ public class DigitalVault {
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
             try {
-                Path banco = Path.of(args.length == 0 ? "cofre.db" : args[0]);
-                new DigitalVault(banco).start();
+                Path databaseFile = Path.of(args.length == 0 ? "cofre.db" : args[0]);
+                new DigitalVault(databaseFile).start();
             } catch (Exception error) {
                 JOptionPane.showMessageDialog(null,
                         "Não foi possível iniciar o Cofre Digital: " + message(error),
@@ -84,16 +91,16 @@ public class DigitalVault {
     }
 
     private void start() throws Exception {
-        banco.logEvent(1001, null, null);
-        janela.setVisible(true);
-        if (!banco.hasUsers()) {
-            banco.logEvent(1005, null, null);
+        database.logEvent(1001, null, null);
+        window.setVisible(true);
+        if (!database.hasUsers()) {
+            database.logEvent(1005, null, null);
             showRegistration(true);
             return;
         }
-        banco.logEvent(1006, null, null);
+        database.logEvent(1006, null, null);
         if (!validateInitialAdministrator()) {
-            JOptionPane.showMessageDialog(janela,
+            JOptionPane.showMessageDialog(window,
                     "A chave privada do administrador não foi validada. O sistema será encerrado.");
             shutDown();
             return;
@@ -102,85 +109,74 @@ public class DigitalVault {
     }
 
     private boolean validateInitialAdministrator() throws Exception {
-        Database.User administrador = banco.findAdministrator();
-        if (administrador == null) {
+        Database.User admin = database.findAdministrator();
+        if (admin == null) {
             return false;
         }
-        JPasswordField campo = new JPasswordField(30);
-        int resposta = JOptionPane.showConfirmDialog(janela, campo,
+        JPasswordField field = new JPasswordField(30);
+        int answer = JOptionPane.showConfirmDialog(window, field,
                 "Frase secreta da chave do administrador", JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.PLAIN_MESSAGE);
-        if (resposta != JOptionPane.OK_OPTION) {
+        if (answer != JOptionPane.OK_OPTION) {
             return false;
         }
-        char[] frase = campo.getPassword();
+        char[] passphrase = field.getPassword();
         try {
-            Database.KeyEntry chaveiro = banco.findKeyEntry(administrador.uid());
-            PrivateKey privada = restoreKey(chaveiro, frase);
-            X509Certificate certificado = CryptoUtils.loadCertificate(chaveiro.certificatePem());
-            boolean parValido;
-            try {
-                parValido = CryptoUtils.proveKeyPair(privada, certificado.getPublicKey(), 10_240);
-            } catch (Exception error) {
-                parValido = false;
-            }
-            if (!parValido) {
-                banco.logEvent(6007, administrador.uid(), null);
-                return false;
-            }
-            fraseAdministrador = frase.clone();
+            verifyStoredKey(database, admin.uid(), database.findKeyEntry(admin.uid()), passphrase);
+            adminPassphrase = passphrase.clone();
             return true;
         } catch (Exception error) {
-            banco.logEvent(6006, administrador.uid(), null);
             return false;
         } finally {
-            CryptoUtils.clear(frase);
+            CryptoUtils.clear(passphrase);
         }
     }
 
-    private void showPanel(JPanel painel) {
-        janela.setContentPane(painel);
-        janela.pack();
-        janela.setLocationRelativeTo(null);
-        janela.revalidate();
+    private void showPanel(JPanel panel) {
+        window.setContentPane(panel);
+        window.pack();
+        window.setLocationRelativeTo(null);
+        window.revalidate();
     }
 
-    private JPanel createBasePanel(String titulo) {
-        JPanel painel = new JPanel(new BorderLayout(10, 10));
-        painel.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
-        JLabel cabecalho = new JLabel("<html><h2>" + titulo + "</h2>"
-                + (usuarioAtual == null ? "" : "Login: " + html(usuarioAtual.email())
-                        + "<br>Grupo: " + html(usuarioAtual.group())
-                        + "<br>Nome: " + html(usuarioAtual.name())) + "</html>");
-        painel.add(cabecalho, BorderLayout.NORTH);
-        return painel;
+    private JPanel createBasePanel(String title) {
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
+        JLabel header = new JLabel("<html><h2>" + title + "</h2>"
+                + (currentUser == null ? "" : "Login: " + html(currentUser.email())
+                        + "<br>Grupo: " + html(currentUser.group())
+                        + "<br>Nome: " + html(currentUser.name())) + "</html>");
+        panel.add(header, BorderLayout.NORTH);
+        return panel;
     }
 
     private void showLogin() {
         clearVerifiedPassword();
-        usuarioAtual = null;
+        currentUser = null;
+        sessionStarted = false;
+        currentCatalog = null;
+        queryPrivateKey = null;
         try {
-            banco.logEvent(2001, null, null);
+            database.logEvent(2001, null, null);
         } catch (Exception error) {
             showError(error);
             return;
         }
-        JPanel painel = createBasePanel("Autenticação — etapa 1");
-        JPanel centro = new JPanel(new GridLayout(0, 1, 8, 8));
-        JTextField email = new JTextField(35);
-        centro.add(new JLabel("Login name (e-mail):"));
-        centro.add(email);
-        JPanel botoes = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        JButton confirmar = new JButton("OK");
-        JButton limpar = new JButton("Limpar");
-        botoes.add(confirmar);
-        botoes.add(limpar);
-        centro.add(botoes);
-        painel.add(centro, BorderLayout.CENTER);
-        confirmar.addActionListener(event -> {
+        JPanel panel = createBasePanel("Autenticação — etapa 1");
+        JPanel center = new JPanel(new GridLayout(0, 1, 8, 8));
+        JTextField emailField = new JTextField(35);
+        center.add(new JLabel("Login name (e-mail):"));
+        center.add(emailField);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton okButton = new JButton("OK");
+        JButton clearButton = new JButton("Limpar");
+        buttons.add(okButton);
+        buttons.add(clearButton);
+        center.add(buttons);
+        panel.add(center, BorderLayout.CENTER);
+        okButton.addActionListener(event -> {
             try {
-                String login = email.getText().trim();
-                LoginResult result = identifyUser(banco, login);
+                LoginResult result = identifyUser(database, emailField.getText().trim());
                 if (result.eventCode() == 2005) {
                     showMessage("Login name não identificado.");
                     return;
@@ -189,15 +185,15 @@ public class DigitalVault {
                     showMessage("Acesso bloqueado temporariamente.");
                     return;
                 }
-                usuarioAtual = result.user();
+                currentUser = result.user();
                 showVirtualKeyboard();
             } catch (Exception error) {
                 showError(error);
             }
         });
-        limpar.addActionListener(event -> email.setText(""));
-        showPanel(painel);
-        email.requestFocusInWindow();
+        clearButton.addActionListener(event -> emailField.setText(""));
+        showPanel(panel);
+        emailField.requestFocusInWindow();
     }
 
     static LoginResult identifyUser(Database database, String email) throws Exception {
@@ -221,80 +217,83 @@ public class DigitalVault {
         showVirtualKeyboard(true);
     }
 
-    private void showVirtualKeyboard(boolean registrarInicio) {
+    private void showVirtualKeyboard(boolean logStart) {
         try {
-            if (registrarInicio) {
-                banco.logEvent(3001, usuarioAtual.uid(), null);
+            if (logStart) {
+                database.logEvent(3001, currentUser.uid(), null);
             }
         } catch (Exception error) {
             showError(error);
             return;
         }
-        JPanel painel = createBasePanel("Autenticação — etapa 2");
-        JPanel centro = new JPanel(new BorderLayout(8, 8));
-        JLabel quantidade = new JLabel("Senha pessoal: 0 dígitos informados");
-        JPanel teclado = new JPanel(new GridLayout(1, 5, 8, 8));
-        List<char[]> pares = new ArrayList<>();
-        JButton[] teclas = new JButton[5];
-        Runnable redistribuir = () -> distributeDigits(teclas);
-        for (int i = 0; i < teclas.length; i++) {
-            teclas[i] = new JButton();
-            JButton tecla = teclas[i];
-            tecla.addActionListener(event -> {
-                if (!recordPressedPair(pares, tecla.getText())) {
+        JPanel panel = createBasePanel("Autenticação — etapa 2");
+        JPanel center = new JPanel(new BorderLayout(8, 8));
+        JLabel counter = new JLabel("Senha pessoal: 0 dígitos informados");
+        JPanel keyboard = new JPanel(new GridLayout(1, 5, 8, 8));
+        List<char[]> pairs = new ArrayList<>();
+        JButton[] keys = new JButton[5];
+        for (int i = 0; i < keys.length; i++) {
+            JButton key = new JButton();
+            keys[i] = key;
+            key.addActionListener(event -> {
+                if (!recordPressedPair(pairs, key.getText())) {
                     return;
                 }
-                quantidade.setText("Senha pessoal: " + pares.size() + " dígitos informados");
-                redistribuir.run();
+                counter.setText("Senha pessoal: " + pairs.size() + " dígitos informados");
+                distributeDigits(keys);
             });
-            teclado.add(tecla);
+            keyboard.add(key);
         }
-        redistribuir.run();
-        centro.add(quantidade, BorderLayout.NORTH);
-        centro.add(teclado, BorderLayout.CENTER);
-        JPanel botoes = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        JButton confirmar = new JButton("OK");
-        JButton limpar = new JButton("Limpar");
-        botoes.add(confirmar);
-        botoes.add(limpar);
-        centro.add(botoes, BorderLayout.SOUTH);
-        painel.add(centro, BorderLayout.CENTER);
+        distributeDigits(keys);
+        center.add(counter, BorderLayout.NORTH);
+        center.add(keyboard, BorderLayout.CENTER);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton okButton = new JButton("OK");
+        JButton clearButton = new JButton("Limpar");
+        buttons.add(okButton);
+        buttons.add(clearButton);
+        center.add(buttons, BorderLayout.SOUTH);
+        panel.add(center, BorderLayout.CENTER);
 
-        limpar.addActionListener(event -> {
-            pares.clear();
-            quantidade.setText("Senha pessoal: 0 dígitos informados");
-            redistribuir.run();
+        clearButton.addActionListener(event -> {
+            pairs.clear();
+            counter.setText("Senha pessoal: 0 dígitos informados");
+            distributeDigits(keys);
         });
-        confirmar.addActionListener(event -> {
-            confirmar.setEnabled(false);
+        okButton.addActionListener(event -> {
+            okButton.setEnabled(false);
+            // Uma senha de 10 dígitos gera até 1024 candidatas no bcrypt, o que pode levar alguns segundos.
+            window.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
             try {
-                char[] senha = findPassword(pares, usuarioAtual.passwordHash());
-                if (senha == null) {
+                char[] password = findPassword(pairs, currentUser.passwordHash());
+                if (password == null) {
                     handlePasswordFailure();
-                    if (usuarioAtual != null) {
-                        confirmar.setEnabled(true);
+                    if (currentUser != null) {
+                        okButton.setEnabled(true);
                     }
                     return;
                 }
-                recordPasswordSuccess(banco, usuarioAtual.uid());
-                senhaComprovada = senha;
+                recordPasswordSuccess(database, currentUser.uid());
+                verifiedPassword = password;
                 showToken();
             } catch (Exception error) {
                 showError(error);
-                confirmar.setEnabled(true);
+                okButton.setEnabled(true);
+            } finally {
+                window.setCursor(Cursor.getDefaultCursor());
             }
         });
-        showPanel(painel);
+        showPanel(panel);
     }
 
-    static void distributeDigits(JButton[] teclas) {
-        List<Integer> digitos = new ArrayList<>();
+    static void distributeDigits(JButton[] keys) {
+        List<Integer> digits = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
-            digitos.add(i);
+            digits.add(i);
         }
-        Collections.shuffle(digitos, new SecureRandom());
+        Collections.shuffle(digits, new SecureRandom());
         for (int i = 0; i < 5; i++) {
-            teclas[i].setText(digitos.get(i * 2) + " " + digitos.get(i * 2 + 1));
+            keys[i].setText(digits.get(i * 2) + " " + digits.get(i * 2 + 1));
         }
     }
 
@@ -309,38 +308,38 @@ public class DigitalVault {
         return true;
     }
 
-    static char[] findPassword(List<char[]> pares, String hash) {
-        if (pares.size() < 8 || pares.size() > 10) {
+    static char[] findPassword(List<char[]> pairs, String hash) {
+        if (pairs.size() < 8 || pairs.size() > 10) {
             return null;
         }
-        char[] candidata = new char[pares.size()];
-        return findPassword(pares, hash, candidata, 0);
+        char[] candidate = new char[pairs.size()];
+        return findPassword(pairs, hash, candidate, 0);
     }
 
-    private static char[] findPassword(List<char[]> pares, String hash,
-            char[] candidata, int posicao) {
-        if (posicao == pares.size()) {
-            return CryptoUtils.verifyBcrypt(hash, candidata) ? candidata.clone() : null;
+    private static char[] findPassword(List<char[]> pairs, String hash,
+            char[] candidate, int position) {
+        if (position == pairs.size()) {
+            return CryptoUtils.verifyBcrypt(hash, candidate) ? candidate.clone() : null;
         }
-        for (char digito : pares.get(posicao)) {
-            candidata[posicao] = digito;
-            char[] encontrada = findPassword(pares, hash, candidata, posicao + 1);
-            if (encontrada != null) {
-                CryptoUtils.clear(candidata);
-                return encontrada;
+        for (char digit : pairs.get(position)) {
+            candidate[position] = digit;
+            char[] found = findPassword(pairs, hash, candidate, position + 1);
+            if (found != null) {
+                CryptoUtils.clear(candidate);
+                return found;
             }
         }
-        candidata[posicao] = '\0';
+        candidate[position] = '\0';
         return null;
     }
 
     private void handlePasswordFailure() throws Exception {
-        int erros = recordPasswordFailure(banco, usuarioAtual.uid());
-        if (erros >= 3) {
+        int failures = recordPasswordFailure(database, currentUser.uid());
+        if (failures >= 3) {
             showMessage("Terceiro erro. O acesso foi bloqueado por 2 minutos.");
             showLogin();
         } else {
-            showMessage("Senha pessoal inválida. Erro " + erros + " de 3.");
+            showMessage("Senha pessoal inválida. Erro " + failures + " de 3.");
             showVirtualKeyboard(false);
         }
     }
@@ -365,45 +364,45 @@ public class DigitalVault {
         showToken(true);
     }
 
-    private void showToken(boolean registrarInicio) {
+    private void showToken(boolean logStart) {
         try {
-            if (registrarInicio) {
-                banco.logEvent(4001, usuarioAtual.uid(), null);
+            if (logStart) {
+                database.logEvent(4001, currentUser.uid(), null);
             }
         } catch (Exception error) {
             showError(error);
             return;
         }
-        JPanel painel = createBasePanel("Autenticação — etapa 3");
-        JPanel centro = new JPanel(new GridLayout(0, 1, 8, 8));
-        JTextField token = new JTextField(6);
-        limitField(token, 6);
-        centro.add(new JLabel("TOTP de 6 dígitos:"));
-        centro.add(token);
-        JPanel botoes = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        JButton confirmar = new JButton("OK");
-        JButton limpar = new JButton("Limpar");
-        botoes.add(confirmar);
-        botoes.add(limpar);
-        centro.add(botoes);
-        painel.add(centro, BorderLayout.CENTER);
-        confirmar.addActionListener(event -> {
+        JPanel panel = createBasePanel("Autenticação — etapa 3");
+        JPanel center = new JPanel(new GridLayout(0, 1, 8, 8));
+        JTextField tokenField = new JTextField(6);
+        limitField(tokenField, 6);
+        center.add(new JLabel("TOTP de 6 dígitos:"));
+        center.add(tokenField);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton okButton = new JButton("OK");
+        JButton clearButton = new JButton("Limpar");
+        buttons.add(okButton);
+        buttons.add(clearButton);
+        center.add(buttons);
+        panel.add(center, BorderLayout.CENTER);
+        okButton.addActionListener(event -> {
             try {
-                if (!verifyToken(usuarioAtual.encryptedTotpSecret(), senhaComprovada,
-                        token.getText().trim())) {
+                if (!verifyToken(currentUser.encryptedTotpSecret(), verifiedPassword,
+                        tokenField.getText().trim())) {
                     handleTokenFailure();
                     return;
                 }
-                recordAuthenticationSuccess(banco, usuarioAtual.uid());
+                recordAuthenticationSuccess(database, currentUser.uid());
+                sessionStarted = true;
                 clearVerifiedPassword();
-                usuarioAtual = banco.findUser(usuarioAtual.uid());
                 showMainMenu();
             } catch (Exception error) {
                 showError(error);
             }
         });
-        limpar.addActionListener(event -> token.setText(""));
-        showPanel(painel);
+        clearButton.addActionListener(event -> tokenField.setText(""));
+        showPanel(panel);
     }
 
     static boolean verifyToken(byte[] encryptedSecret, char[] verifiedPassword,
@@ -416,17 +415,17 @@ public class DigitalVault {
             TOTP totp = new TOTP(new String(base32Bytes, StandardCharsets.US_ASCII), 30);
             return totp.validateCode(code);
         } finally {
-            java.util.Arrays.fill(base32Bytes, (byte) 0);
+            Arrays.fill(base32Bytes, (byte) 0);
         }
     }
 
     private void handleTokenFailure() throws Exception {
-        int erros = recordTokenFailure(banco, usuarioAtual.uid());
-        if (erros >= 3) {
+        int failures = recordTokenFailure(database, currentUser.uid());
+        if (failures >= 3) {
             showMessage("Terceiro erro. O acesso foi bloqueado por 2 minutos.");
             showLogin();
         } else {
-            showMessage("Token inválido. Erro " + erros + " de 3.");
+            showMessage("Token inválido. Erro " + failures + " de 3.");
             showToken(false);
         }
     }
@@ -451,184 +450,179 @@ public class DigitalVault {
 
     private void showMainMenu() {
         try {
-            usuarioAtual = banco.findUser(usuarioAtual.uid());
-            banco.logEvent(5001, usuarioAtual.uid(), null);
+            currentUser = database.findUser(currentUser.uid());
+            database.logEvent(5001, currentUser.uid(), null);
         } catch (Exception error) {
             showError(error);
             return;
         }
-        JPanel painel = createBasePanel("Tela Principal");
-        JPanel centro = new JPanel(new GridLayout(0, 1, 8, 8));
-        centro.add(new JLabel("Total de acessos do usuário: " + usuarioAtual.accessCount()));
-        if (canRegisterUser(usuarioAtual)) {
-            JButton cadastrar = new JButton("1 — Cadastrar um novo usuário");
-            cadastrar.addActionListener(event -> {
+        JPanel panel = createBasePanel("Tela Principal");
+        JPanel center = new JPanel(new GridLayout(0, 1, 8, 8));
+        center.add(new JLabel("Total de acessos do usuário: " + currentUser.accessCount()));
+        // O grupo Usuário não vê a opção 1; as demais mantêm o número usado nos MIDs 5003 e 5004.
+        if (canRegisterUser(currentUser)) {
+            JButton registerButton = new JButton("1 — Cadastrar um novo usuário");
+            registerButton.addActionListener(event -> {
                 try {
-                    banco.logEvent(5002, usuarioAtual.uid(), null);
+                    database.logEvent(5002, currentUser.uid(), null);
                     showRegistration(false);
                 } catch (Exception error) {
                     showError(error);
                 }
             });
-            centro.add(cadastrar);
+            center.add(registerButton);
         }
-        JButton consultar = new JButton(usuarioAtual.isAdministrator()
-                ? "2 — Consultar pasta de arquivos secretos do usuário"
-                : "1 — Consultar pasta de arquivos secretos do usuário");
-        JButton sair = new JButton(usuarioAtual.isAdministrator()
-                ? "3 — Sair do Sistema" : "2 — Sair do Sistema");
-        consultar.addActionListener(event -> {
+        JButton queryButton = new JButton("2 — Consultar pasta de arquivos secretos do usuário");
+        JButton exitButton = new JButton("3 — Sair do Sistema");
+        queryButton.addActionListener(event -> {
             try {
-                banco.logEvent(5003, usuarioAtual.uid(), null);
+                database.logEvent(5003, currentUser.uid(), null);
                 showFileQuery();
             } catch (Exception error) {
                 showError(error);
             }
         });
-        sair.addActionListener(event -> {
+        exitButton.addActionListener(event -> {
             try {
-                banco.logEvent(5004, usuarioAtual.uid(), null);
+                database.logEvent(5004, currentUser.uid(), null);
                 showExit();
             } catch (Exception error) {
                 showError(error);
             }
         });
-        centro.add(consultar);
-        centro.add(sair);
-        painel.add(centro, BorderLayout.CENTER);
-        showPanel(painel);
+        center.add(queryButton);
+        center.add(exitButton);
+        panel.add(center, BorderLayout.CENTER);
+        showPanel(panel);
     }
 
-    private void showRegistration(boolean inicial) {
-        if (!inicial && !canRegisterUser(usuarioAtual)) {
+    private void showRegistration(boolean initial) {
+        if (!initial && !canRegisterUser(currentUser)) {
             showMessage("Somente administradores podem cadastrar usuários.");
             return;
         }
+        Long actorUid = initial ? null : currentUser.uid();
         try {
-            banco.logEvent(6001, inicial ? null : usuarioAtual.uid(), null);
+            database.logEvent(6001, actorUid, null);
         } catch (Exception error) {
             showError(error);
             return;
         }
-        JPanel painel = createBasePanel(inicial ? "Cadastro inicial do administrador" : "Cadastro de usuário");
-        JPanel formulario = new JPanel(new GridLayout(0, 2, 7, 7));
-        JTextField certificado = new JTextField(35);
-        JTextField chave = new JTextField(35);
-        JPasswordField frase = new JPasswordField(35);
-        JComboBox<String> grupo = new JComboBox<>(new String[] {"Administrador", "Usuário"});
-        grupo.setEnabled(!inicial);
-        JPasswordField senha = new JPasswordField(10);
-        JPasswordField confirmacao = new JPasswordField(10);
-        limitField(certificado, 255);
-        limitField(chave, 255);
-        limitField(frase, 255);
-        limitField(senha, 10);
-        limitField(confirmacao, 10);
-        formulario.add(new JLabel("Total de usuários do sistema:"));
+        JPanel panel = createBasePanel(initial ? "Cadastro inicial do administrador" : "Cadastro de usuário");
+        JPanel form = new JPanel(new GridLayout(0, 2, 7, 7));
+        JTextField certificateField = new JTextField(35);
+        JTextField keyField = new JTextField(35);
+        JPasswordField passphraseField = new JPasswordField(35);
+        JComboBox<String> groupBox = new JComboBox<>(new String[] {"Administrador", "Usuário"});
+        groupBox.setEnabled(!initial);
+        JPasswordField passwordField = new JPasswordField(10);
+        JPasswordField confirmationField = new JPasswordField(10);
+        limitField(certificateField, 255);
+        limitField(keyField, 255);
+        limitField(passphraseField, 255);
+        limitField(passwordField, 10);
+        limitField(confirmationField, 10);
+        form.add(new JLabel("Total de usuários do sistema:"));
         try {
-            formulario.add(new JLabel(String.valueOf(banco.countUsers())));
+            form.add(new JLabel(String.valueOf(database.countUsers())));
         } catch (Exception error) {
-            formulario.add(new JLabel("indisponível"));
+            form.add(new JLabel("indisponível"));
         }
-        addField(formulario, "Caminho do certificado digital:", certificado);
-        addField(formulario, "Caminho da chave privada:", chave);
-        addField(formulario, "Frase secreta:", frase);
-        addField(formulario, "Grupo:", grupo);
-        addField(formulario, "Senha pessoal:", senha);
-        addField(formulario, "Confirmação da senha:", confirmacao);
-        JPanel botoes = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        JButton cadastrar = new JButton("Cadastrar");
-        JButton voltar = new JButton("Voltar de Cadastrar para o Menu Principal");
-        voltar.setVisible(!inicial);
-        botoes.add(cadastrar);
-        botoes.add(voltar);
-        JPanel centro = new JPanel(new BorderLayout(8, 8));
-        centro.add(formulario, BorderLayout.CENTER);
-        centro.add(botoes, BorderLayout.SOUTH);
-        painel.add(centro, BorderLayout.CENTER);
+        addField(form, "Caminho do certificado digital:", certificateField);
+        addField(form, "Caminho da chave privada:", keyField);
+        addField(form, "Frase secreta:", passphraseField);
+        addField(form, "Grupo:", groupBox);
+        addField(form, "Senha pessoal:", passwordField);
+        addField(form, "Confirmação da senha:", confirmationField);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton registerButton = new JButton("Cadastrar");
+        JButton backButton = new JButton("Voltar de Cadastrar para o Menu Principal");
+        backButton.setVisible(!initial);
+        buttons.add(registerButton);
+        buttons.add(backButton);
+        JPanel center = new JPanel(new BorderLayout(8, 8));
+        center.add(form, BorderLayout.CENTER);
+        center.add(buttons, BorderLayout.SOUTH);
+        panel.add(center, BorderLayout.CENTER);
 
-        cadastrar.addActionListener(event -> {
-            char[] fraseInformada = frase.getPassword();
-            char[] senhaInformada = senha.getPassword();
-            char[] confirmacaoInformada = confirmacao.getPassword();
+        registerButton.addActionListener(event -> {
+            char[] passphrase = passphraseField.getPassword();
+            char[] password = passwordField.getPassword();
+            char[] confirmation = confirmationField.getPassword();
             try {
-                banco.logEvent(6002, inicial ? null : usuarioAtual.uid(), null);
-                if (certificado.getText().length() > 255 || chave.getText().length() > 255
-                        || fraseInformada.length > 255 || !isPasswordValid(senhaInformada)
-                        || !java.util.Arrays.equals(senhaInformada, confirmacaoInformada)) {
-                    banco.logEvent(6003, inicial ? null : usuarioAtual.uid(), null);
+                database.logEvent(6002, actorUid, null);
+                if (!isPasswordValid(password) || !Arrays.equals(password, confirmation)) {
+                    database.logEvent(6003, actorUid, null);
                     throw new Exception("A senha deve ter de 8 a 10 dígitos, sem dígitos iguais consecutivos, e coincidir com a confirmação.");
                 }
-                Long actorUid = inicial ? null : usuarioAtual.uid();
-                RegistrationMaterial material = loadRegistrationMaterial(banco, actorUid,
-                        certificado.getText().trim(), chave.getText().trim(), fraseInformada);
-                X509Certificate certificadoLido = material.certificate();
-                byte[] certificadoPem = material.certificatePem();
-                byte[] chaveCifrada = material.encryptedPrivateKey();
-                String email = CryptoUtils.extractEmail(certificadoLido);
-                String nome = CryptoUtils.extractName(certificadoLido);
-                if (email == null || nome == null || !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
-                        || banco.findUser(email) != null) {
+                RegistrationMaterial material = loadRegistrationMaterial(database, actorUid,
+                        certificateField.getText().trim(), keyField.getText().trim(), passphrase);
+                X509Certificate certificate = material.certificate();
+                String email = CryptoUtils.extractEmail(certificate);
+                String name = CryptoUtils.extractName(certificate);
+                if (email == null || name == null || !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+                        || database.findUser(email) != null) {
                     throw new Exception("O certificado não contém nome/e-mail válido e único.");
                 }
-                String detalhes = certificateDetails(certificadoLido, nome, email);
-                int resposta = JOptionPane.showConfirmDialog(janela, new JLabel(detalhes),
+                String details = certificateDetails(certificate, name, email);
+                int answer = JOptionPane.showConfirmDialog(window, new JLabel(details),
                         "Confirmação dos dados", JOptionPane.YES_NO_OPTION);
-                if (resposta != JOptionPane.YES_OPTION) {
-                    banco.logEvent(6009, inicial ? null : usuarioAtual.uid(), null);
+                if (answer != JOptionPane.YES_OPTION) {
+                    database.logEvent(6009, actorUid, null);
                     return;
                 }
-                banco.logEvent(6008, inicial ? null : usuarioAtual.uid(), null);
-                byte[] segredo = new byte[20];
-                new SecureRandom().nextBytes(segredo);
-                String base32 = new Base32().toString(segredo);
-                byte[] segredoCifrado = CryptoUtils.encryptAes(
-                        base32.getBytes(StandardCharsets.US_ASCII), senhaInformada);
-                String hash = CryptoUtils.generateBcrypt(senhaInformada);
-                int gid = inicial || grupo.getSelectedIndex() == 0
+                database.logEvent(6008, actorUid, null);
+                byte[] secret = new byte[20];
+                new SecureRandom().nextBytes(secret);
+                String base32 = new Base32(Base32.Alphabet.BASE32, false, false).toString(secret);
+                byte[] encryptedSecret = CryptoUtils.encryptAes(
+                        base32.getBytes(StandardCharsets.US_ASCII), password);
+                String hash = CryptoUtils.generateBcrypt(password);
+                int gid = initial || groupBox.getSelectedIndex() == 0
                         ? Database.ADMIN_GROUP_ID : Database.USER_GROUP_ID;
-                banco.insertUser(nome, email, gid, UUID.randomUUID().toString(), hash,
-                        segredoCifrado, certificadoPem, chaveCifrada);
-                JOptionPane.showMessageDialog(janela,
+                database.insertUser(name, email, gid, UUID.randomUUID().toString(), hash,
+                        encryptedSecret, material.certificatePem(), material.encryptedPrivateKey());
+                JOptionPane.showMessageDialog(window,
                         "Usuário cadastrado. Segredo Base32 para o Google Authenticator:\n" + base32,
                         "Cadastro concluído", JOptionPane.INFORMATION_MESSAGE);
-                if (inicial) {
-                    fraseAdministrador = fraseInformada.clone();
-                    clearFields(certificado, chave, frase, senha, confirmacao);
+                clearFields(certificateField, keyField, passphraseField, passwordField,
+                        confirmationField);
+                if (initial) {
+                    adminPassphrase = passphrase.clone();
                     showLogin();
                 } else {
-                    clearFields(certificado, chave, frase, senha, confirmacao);
                     showRegistration(false);
                 }
             } catch (Exception error) {
                 showMessage(message(error));
             } finally {
-                CryptoUtils.clear(fraseInformada);
-                CryptoUtils.clear(senhaInformada);
-                CryptoUtils.clear(confirmacaoInformada);
+                CryptoUtils.clear(passphrase);
+                CryptoUtils.clear(password);
+                CryptoUtils.clear(confirmation);
             }
         });
-        voltar.addActionListener(event -> {
+        backButton.addActionListener(event -> {
             try {
-                banco.logEvent(6010, usuarioAtual.uid(), null);
+                database.logEvent(6010, currentUser.uid(), null);
                 showMainMenu();
             } catch (Exception error) {
                 showError(error);
             }
         });
-        showPanel(painel);
+        showPanel(panel);
     }
 
     static boolean canRegisterUser(Database.User user) {
         return user != null && user.isAdministrator();
     }
 
-    static boolean isPasswordValid(char[] senha) {
-        if (senha == null || senha.length < 8 || senha.length > 10) {
+    static boolean isPasswordValid(char[] password) {
+        if (password == null || password.length < 8 || password.length > 10) {
             return false;
         }
-        for (int i = 0; i < senha.length; i++) {
-            if (senha[i] < '0' || senha[i] > '9' || (i > 0 && senha[i] == senha[i - 1])) {
+        for (int i = 0; i < password.length; i++) {
+            if (password[i] < '0' || password[i] > '9'
+                    || (i > 0 && password[i] == password[i - 1])) {
                 return false;
             }
         }
@@ -637,179 +631,177 @@ public class DigitalVault {
 
     private void showFileQuery() {
         try {
-            banco.logEvent(7001, usuarioAtual.uid(), null);
-            usuarioAtual = banco.findUser(usuarioAtual.uid());
+            database.logEvent(7001, currentUser.uid(), null);
+            currentUser = database.findUser(currentUser.uid());
         } catch (Exception error) {
             showError(error);
             return;
         }
-        JPanel painel = createBasePanel("Consulta de arquivos secretos");
-        JPanel topo = new JPanel(new GridLayout(0, 2, 7, 7));
-        JTextField pasta = new JTextField(35);
-        JPasswordField frase = new JPasswordField(35);
-        limitField(pasta, 255);
-        limitField(frase, 255);
-        topo.add(new JLabel("Total de consultas do usuário:"));
-        JLabel totalConsultas = new JLabel(String.valueOf(usuarioAtual.queryCount()));
-        topo.add(totalConsultas);
-        addField(topo, "Caminho da pasta:", pasta);
-        addField(topo, "Frase secreta:", frase);
-        JButton listar = new JButton("Listar");
-        JButton voltar = new JButton("Voltar de Consultar para o Menu Principal");
-        topo.add(listar);
-        topo.add(voltar);
-        DefaultTableModel modelo = new DefaultTableModel(
+        currentCatalog = null;
+        queryPrivateKey = null;
+        JPanel panel = createBasePanel("Consulta de arquivos secretos");
+        JPanel top = new JPanel(new GridLayout(0, 2, 7, 7));
+        JTextField folderField = new JTextField(35);
+        JPasswordField passphraseField = new JPasswordField(35);
+        limitField(folderField, 255);
+        limitField(passphraseField, 255);
+        top.add(new JLabel("Total de consultas do usuário:"));
+        JLabel queryCountLabel = new JLabel(String.valueOf(currentUser.queryCount()));
+        top.add(queryCountLabel);
+        addField(top, "Caminho da pasta:", folderField);
+        addField(top, "Frase secreta:", passphraseField);
+        JButton listButton = new JButton("Listar");
+        JButton backButton = new JButton("Voltar de Consultar para o Menu Principal");
+        top.add(listButton);
+        top.add(backButton);
+        DefaultTableModel model = new DefaultTableModel(
                 new Object[] {"Nome secreto", "Dono", "Grupo"}, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
                 return false;
             }
         };
-        JTable tabela = new JTable(modelo);
-        tabela.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        painel.add(topo, BorderLayout.NORTH);
-        painel.add(new JScrollPane(tabela), BorderLayout.CENTER);
-        final Vault.Catalog[] catalogoAtual = new Vault.Catalog[1];
-        final PrivateKey[] privadaAtual = new PrivateKey[1];
+        JTable table = new JTable(model);
+        table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(new JScrollPane(table), BorderLayout.CENTER);
 
-        listar.addActionListener(event -> {
-            char[] fraseInformada = frase.getPassword();
+        listButton.addActionListener(event -> {
+            char[] passphrase = passphraseField.getPassword();
             try {
-                banco.logEvent(7003, usuarioAtual.uid(), null);
-                catalogoAtual[0] = null;
-                privadaAtual[0] = null;
-                modelo.setRowCount(0);
-                if (pasta.getText().length() > 255 || fraseInformada.length > 255) {
-                    throw new Exception("Caminho ou frase excede 255 caracteres.");
+                database.logEvent(7003, currentUser.uid(), null);
+                currentCatalog = null;
+                queryPrivateKey = null;
+                model.setRowCount(0);
+                PrivateKey userPrivateKey = verifyStoredKey(database, currentUser.uid(),
+                        database.findKeyEntry(currentUser.uid()), passphrase);
+                Database.User admin = database.findAdministrator();
+                Database.KeyEntry adminKey = database.findKeyEntry(admin.uid());
+                PrivateKey adminPrivateKey = restoreKey(adminKey, adminPassphrase);
+                X509Certificate adminCertificate = CryptoUtils.loadCertificate(
+                        adminKey.certificatePem());
+                Vault.Catalog catalog = vault.listFiles(Path.of(folderField.getText().trim()),
+                        currentUser, adminPrivateKey, adminCertificate);
+                for (Vault.FileEntry file : catalog.allowedFiles()) {
+                    model.addRow(new Object[] {file.name(), file.owner(), file.group()});
                 }
-                Database.KeyEntry chaveUser = banco.findKeyEntry(usuarioAtual.uid());
-                PrivateKey privadaUser = verifyStoredKey(chaveUser, fraseInformada);
-                Database.User admin = banco.findAdministrator();
-                Database.KeyEntry chaveAdmin = banco.findKeyEntry(admin.uid());
-                PrivateKey privadaAdmin = restoreKey(chaveAdmin, fraseAdministrador);
-                X509Certificate certificadoAdmin = CryptoUtils.loadCertificate(
-                        chaveAdmin.certificatePem());
-                Vault.Catalog catalogo = cofre.listFiles(Path.of(pasta.getText().trim()),
-                        usuarioAtual, privadaAdmin, certificadoAdmin);
-                modelo.setRowCount(0);
-                for (Vault.FileEntry arquivo : catalogo.allowedFiles()) {
-                    modelo.addRow(new Object[] {arquivo.name(), arquivo.owner(), arquivo.group()});
-                }
-                banco.logEvent(7009, usuarioAtual.uid(), null);
-                banco.logEvent(7014, usuarioAtual.uid(), null);
-                catalogoAtual[0] = catalogo;
-                privadaAtual[0] = privadaUser;
-                banco.incrementQueryCount(usuarioAtual.uid());
-                usuarioAtual = banco.findUser(usuarioAtual.uid());
-                totalConsultas.setText(String.valueOf(usuarioAtual.queryCount()));
-                frase.setText("");
+                database.logEvent(7009, currentUser.uid(), null);
+                database.logEvent(7014, currentUser.uid(), null);
+                currentCatalog = catalog;
+                queryPrivateKey = userPrivateKey;
+                database.incrementQueryCount(currentUser.uid());
+                currentUser = database.findUser(currentUser.uid());
+                queryCountLabel.setText(String.valueOf(currentUser.queryCount()));
+                passphraseField.setText("");
             } catch (Exception error) {
                 showMessage(message(error));
             } finally {
-                CryptoUtils.clear(fraseInformada);
+                CryptoUtils.clear(passphrase);
             }
         });
-        tabela.addMouseListener(new java.awt.event.MouseAdapter() {
+        table.addMouseListener(new MouseAdapter() {
             @Override
-            public void mouseClicked(java.awt.event.MouseEvent event) {
-                if (event.getClickCount() != 2 || tabela.getSelectedRow() < 0
-                        || catalogoAtual[0] == null || privadaAtual[0] == null) {
+            public void mouseClicked(MouseEvent event) {
+                if (event.getClickCount() != 2 || table.getSelectedRow() < 0
+                        || currentCatalog == null || queryPrivateKey == null) {
                     return;
                 }
-                JFileChooser seletor = new JFileChooser();
-                seletor.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-                seletor.setDialogTitle("Escolha a pasta de destino");
-                if (seletor.showSaveDialog(janela) != JFileChooser.APPROVE_OPTION) {
+                JFileChooser chooser = new JFileChooser();
+                chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+                chooser.setDialogTitle("Escolha a pasta de destino");
+                if (chooser.showSaveDialog(window) != JFileChooser.APPROVE_OPTION) {
                     return;
                 }
                 try {
-                    Vault.FileEntry arquivo = catalogoAtual[0].allowedFiles().get(tabela.getSelectedRow());
-                    Path saida = cofre.openFile(catalogoAtual[0], arquivo, usuarioAtual,
-                            privadaAtual[0], seletor.getSelectedFile().toPath());
-                    showMessage("Arquivo gravado em " + saida);
+                    Vault.FileEntry file = currentCatalog.allowedFiles().get(table.getSelectedRow());
+                    Path output = vault.openFile(currentCatalog, file, currentUser,
+                            queryPrivateKey, chooser.getSelectedFile().toPath());
+                    showMessage("Arquivo gravado em " + output);
                 } catch (Exception error) {
                     showMessage(message(error));
                 }
             }
         });
-        voltar.addActionListener(event -> {
+        backButton.addActionListener(event -> {
             try {
-                privadaAtual[0] = null;
-                banco.logEvent(7002, usuarioAtual.uid(), null);
+                currentCatalog = null;
+                queryPrivateKey = null;
+                database.logEvent(7002, currentUser.uid(), null);
                 showMainMenu();
             } catch (Exception error) {
                 showError(error);
             }
         });
-        showPanel(painel);
+        showPanel(panel);
     }
 
     private void showExit() {
         try {
-            banco.logEvent(8001, usuarioAtual.uid(), null);
+            database.logEvent(8001, currentUser.uid(), null);
         } catch (Exception error) {
             showError(error);
             return;
         }
-        JPanel painel = createBasePanel("Saída do sistema");
-        JPanel centro = new JPanel(new GridLayout(0, 1, 8, 8));
-        centro.add(new JLabel("Total de acessos do usuário: " + usuarioAtual.accessCount()));
-        centro.add(new JLabel(EXIT_MESSAGE));
-        JButton sessao = new JButton("Encerrar Sessão");
-        JButton sistema = new JButton("Encerrar Sistema");
-        JButton voltar = new JButton("Voltar de Sair para o Menu Principal");
-        centro.add(sessao);
-        centro.add(sistema);
-        centro.add(voltar);
-        painel.add(centro, BorderLayout.CENTER);
-        sessao.addActionListener(event -> {
+        JPanel panel = createBasePanel("Saída do sistema");
+        JPanel center = new JPanel(new GridLayout(0, 1, 8, 8));
+        center.add(new JLabel("Total de acessos do usuário: " + currentUser.accessCount()));
+        center.add(new JLabel(EXIT_MESSAGE));
+        JButton sessionButton = new JButton("Encerrar Sessão");
+        JButton systemButton = new JButton("Encerrar Sistema");
+        JButton backButton = new JButton("Voltar de Sair para o Menu Principal");
+        center.add(sessionButton);
+        center.add(systemButton);
+        center.add(backButton);
+        panel.add(center, BorderLayout.CENTER);
+        sessionButton.addActionListener(event -> {
             try {
-                banco.logEvent(8002, usuarioAtual.uid(), null);
-                recordSessionEnd(banco, usuarioAtual);
+                database.logEvent(8002, currentUser.uid(), null);
+                recordSessionEnd(database, currentUser);
                 showLogin();
             } catch (Exception error) {
                 showError(error);
             }
         });
-        sistema.addActionListener(event -> {
+        systemButton.addActionListener(event -> {
             try {
-                banco.logEvent(8003, usuarioAtual.uid(), null);
+                database.logEvent(8003, currentUser.uid(), null);
             } catch (Exception error) {
                 showError(error);
             }
             shutDown();
         });
-        voltar.addActionListener(event -> {
+        backButton.addActionListener(event -> {
             try {
-                banco.logEvent(8004, usuarioAtual.uid(), null);
+                database.logEvent(8004, currentUser.uid(), null);
                 showMainMenu();
             } catch (Exception error) {
                 showError(error);
             }
         });
-        showPanel(painel);
+        showPanel(panel);
     }
 
     private void shutDown() {
-        if (encerrado) {
+        if (closed) {
             return;
         }
-        encerrado = true;
+        closed = true;
         try {
-            recordSessionEnd(banco, usuarioAtual);
-            banco.logEvent(1002, null, null);
+            recordSessionEnd(database, sessionStarted ? currentUser : null);
+            database.logEvent(1002, null, null);
         } catch (Exception ignored) {
             // Não há interface disponível para recuperar uma falha durante o encerramento.
         } finally {
             try {
-                banco.close();
+                database.close();
             } catch (Exception ignored) {
                 // O encerramento continua para que os segredos sejam limpos da memória.
             }
             clearVerifiedPassword();
-            CryptoUtils.clear(fraseAdministrador);
-            fraseAdministrador = null;
-            janela.dispose();
+            CryptoUtils.clear(adminPassphrase);
+            adminPassphrase = null;
+            queryPrivateKey = null;
+            window.dispose();
         }
     }
 
@@ -819,11 +811,24 @@ public class DigitalVault {
         }
     }
 
-    static PrivateKey verifyStoredKey(Database.KeyEntry keyEntry, char[] passphrase)
-            throws Exception {
-        PrivateKey privateKey = restoreKey(keyEntry, passphrase);
-        X509Certificate certificate = CryptoUtils.loadCertificate(keyEntry.certificatePem());
-        if (!CryptoUtils.proveKeyPair(privateKey, certificate.getPublicKey(), 10_240)) {
+    static PrivateKey verifyStoredKey(Database database, long uid, Database.KeyEntry keyEntry,
+            char[] passphrase) throws Exception {
+        PrivateKey privateKey;
+        try {
+            privateKey = restoreKey(keyEntry, passphrase);
+        } catch (Exception error) {
+            database.logEvent(6006, uid, null);
+            throw new Exception("Frase secreta inválida.");
+        }
+        boolean validPair;
+        try {
+            X509Certificate certificate = CryptoUtils.loadCertificate(keyEntry.certificatePem());
+            validPair = CryptoUtils.proveKeyPair(privateKey, certificate.getPublicKey(), 10_240);
+        } catch (Exception error) {
+            validPair = false;
+        }
+        if (!validPair) {
+            database.logEvent(6007, uid, null);
             throw new Exception("A chave privada não corresponde ao certificado.");
         }
         return privateKey;
@@ -860,7 +865,7 @@ public class DigitalVault {
             try {
                 privateKey = CryptoUtils.restorePrivateKey(openPrivateKey);
             } finally {
-                java.util.Arrays.fill(openPrivateKey, (byte) 0);
+                Arrays.fill(openPrivateKey, (byte) 0);
             }
         } catch (Exception error) {
             database.logEvent(6006, actorUid, null);
@@ -877,86 +882,82 @@ public class DigitalVault {
             database.logEvent(6007, actorUid, null);
             throw new Exception("A chave privada não corresponde ao certificado.");
         }
-        return new RegistrationMaterial(
-                certificate, certificatePem, encryptedPrivateKey, privateKey);
+        return new RegistrationMaterial(certificate, certificatePem, encryptedPrivateKey);
     }
 
-    private static PrivateKey restoreKey(Database.KeyEntry chaveiro, char[] frase) throws Exception {
-        if (chaveiro == null) {
+    private static PrivateKey restoreKey(Database.KeyEntry keyEntry, char[] passphrase)
+            throws Exception {
+        if (keyEntry == null) {
             throw new Exception("Chave do usuário não encontrada.");
         }
-        byte[] conteudo = CryptoUtils.decryptAes(chaveiro.encryptedPrivateKey(), frase);
+        byte[] content = CryptoUtils.decryptAes(keyEntry.encryptedPrivateKey(), passphrase);
         try {
-            return CryptoUtils.restorePrivateKey(conteudo);
+            return CryptoUtils.restorePrivateKey(content);
         } finally {
-            java.util.Arrays.fill(conteudo, (byte) 0);
+            Arrays.fill(content, (byte) 0);
         }
     }
 
     private void clearVerifiedPassword() {
-        CryptoUtils.clear(senhaComprovada);
-        senhaComprovada = null;
+        CryptoUtils.clear(verifiedPassword);
+        verifiedPassword = null;
     }
 
-    private static void addField(JPanel painel, String rotulo, java.awt.Component campo) {
-        painel.add(new JLabel(rotulo));
-        painel.add(campo);
+    private static void addField(JPanel panel, String label, java.awt.Component field) {
+        panel.add(new JLabel(label));
+        panel.add(field);
     }
 
-    private static void limitField(JTextField campo, int limite) {
-        ((AbstractDocument) campo.getDocument()).setDocumentFilter(new DocumentFilter() {
+    private static void limitField(JTextField field, int limit) {
+        ((AbstractDocument) field.getDocument()).setDocumentFilter(new DocumentFilter() {
             @Override
-            public void insertString(FilterBypass bypass, int offset, String texto, AttributeSet atributos)
-                    throws BadLocationException {
-                if (texto != null && bypass.getDocument().getLength() + texto.length() <= limite) {
-                    super.insertString(bypass, offset, texto, atributos);
+            public void insertString(FilterBypass bypass, int offset, String text,
+                    AttributeSet attributes) throws BadLocationException {
+                if (text != null && bypass.getDocument().getLength() + text.length() <= limit) {
+                    super.insertString(bypass, offset, text, attributes);
                 }
             }
 
             @Override
-            public void replace(FilterBypass bypass, int offset, int tamanho, String texto,
-                    AttributeSet atributos) throws BadLocationException {
-                if (texto != null && bypass.getDocument().getLength() - tamanho + texto.length() <= limite) {
-                    super.replace(bypass, offset, tamanho, texto, atributos);
+            public void replace(FilterBypass bypass, int offset, int length, String text,
+                    AttributeSet attributes) throws BadLocationException {
+                if (text != null && bypass.getDocument().getLength() - length + text.length() <= limit) {
+                    super.replace(bypass, offset, length, text, attributes);
                 }
             }
         });
     }
 
-    private static void clearFields(JTextField certificado, JTextField chave,
-            JPasswordField frase, JPasswordField senha, JPasswordField confirmacao) {
-        certificado.setText("");
-        chave.setText("");
-        frase.setText("");
-        senha.setText("");
-        confirmacao.setText("");
+    private static void clearFields(JTextField... fields) {
+        for (JTextField field : fields) {
+            field.setText("");
+        }
     }
 
-    static String certificateDetails(X509Certificate certificado,
-            String nome, String email) {
-        DateTimeFormatter formato = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
+    static String certificateDetails(X509Certificate certificate, String name, String email) {
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
                 .withZone(ZoneId.systemDefault());
-        return "<html>Versão: " + certificado.getVersion()
-                + "<br>Série: " + certificado.getSerialNumber()
-                + "<br>Validade: " + formato.format(certificado.getNotBefore().toInstant())
-                + " até " + formato.format(certificado.getNotAfter().toInstant())
-                + "<br>Tipo de assinatura: " + html(certificado.getSigAlgName())
-                + "<br>Emissor: " + html(certificado.getIssuerX500Principal().getName())
-                + "<br>Sujeito: " + html(certificado.getSubjectX500Principal().getName())
-                + "<br>Nome: " + html(nome) + "<br>E-mail: " + html(email) + "</html>";
+        return "<html>Versão: " + certificate.getVersion()
+                + "<br>Série: " + certificate.getSerialNumber()
+                + "<br>Validade: " + formatter.format(certificate.getNotBefore().toInstant())
+                + " até " + formatter.format(certificate.getNotAfter().toInstant())
+                + "<br>Tipo de assinatura: " + html(certificate.getSigAlgName())
+                + "<br>Emissor: " + html(certificate.getIssuerX500Principal().getName())
+                + "<br>Sujeito: " + html(certificate.getSubjectX500Principal().getName())
+                + "<br>Nome: " + html(name) + "<br>E-mail: " + html(email) + "</html>";
     }
 
-    private static String html(String texto) {
-        return texto == null ? "" : texto.replace("&", "&amp;")
+    private static String html(String text) {
+        return text == null ? "" : text.replace("&", "&amp;")
                 .replace("<", "&lt;").replace(">", "&gt;");
     }
 
-    private void showMessage(String texto) {
-        JOptionPane.showMessageDialog(janela, texto, "Cofre Digital", JOptionPane.INFORMATION_MESSAGE);
+    private void showMessage(String text) {
+        JOptionPane.showMessageDialog(window, text, "Cofre Digital", JOptionPane.INFORMATION_MESSAGE);
     }
 
     private void showError(Exception error) {
-        JOptionPane.showMessageDialog(janela, message(error), "Erro", JOptionPane.ERROR_MESSAGE);
+        JOptionPane.showMessageDialog(window, message(error), "Erro", JOptionPane.ERROR_MESSAGE);
     }
 
     static String message(Throwable error) {
@@ -968,7 +969,7 @@ public class DigitalVault {
                 || error instanceof SecurityException) {
             return "Falha ao acessar arquivo ou diretório.";
         }
-        String texto = error.getMessage();
-        return texto == null || texto.isBlank() ? "Operação não concluída." : texto;
+        String text = error.getMessage();
+        return text == null || text.isBlank() ? "Operação não concluída." : text;
     }
 }

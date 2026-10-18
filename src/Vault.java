@@ -25,240 +25,230 @@ public class Vault {
             Map<String, FileEntry> files, List<ShareEntry> shares) {
     }
 
-    private final Database banco;
+    private final Database database;
 
-    public Vault(Database banco) {
-        this.banco = banco;
+    public Vault(Database database) {
+        this.database = database;
     }
 
-    public Catalog listFiles(Path pastaInformada, Database.User usuario,
-            PrivateKey privadaAdmin, X509Certificate certificadoAdmin) throws Exception {
-        Path pasta;
+    public Catalog listFiles(Path informedFolder, Database.User user,
+            PrivateKey adminPrivateKey, X509Certificate adminCertificate) throws Exception {
+        Path folder;
         try {
-            if (pastaInformada == null || pastaInformada.toString().isBlank()) {
+            if (informedFolder == null || informedFolder.toString().isBlank()) {
                 throw new Exception();
             }
-            pasta = pastaInformada.toAbsolutePath().normalize();
-            if (!Files.isDirectory(pasta, LinkOption.NOFOLLOW_LINKS)) {
+            folder = informedFolder.toAbsolutePath().normalize();
+            if (!Files.isDirectory(folder, LinkOption.NOFOLLOW_LINKS)) {
                 throw new Exception();
             }
         } catch (Exception error) {
-            banco.logEvent(7004, usuario.uid(), null);
+            database.logEvent(7004, user.uid(), null);
             throw new Exception("A pasta segura é inválida.");
         }
 
-        byte[] index = openMetadata(pasta, "index", privadaAdmin,
-                certificadoAdmin.getPublicKey(), usuario.uid(), 7005, 7006, 7007, 7008);
-        Map<String, FileEntry> arquivos = parseIndex(index);
+        byte[] index = openMetadata(folder, "index", adminPrivateKey,
+                adminCertificate.getPublicKey(), user.uid(), 7005, 7006, 7007, 7008);
+        Map<String, FileEntry> files = parseIndex(index);
 
-        byte[] share = openMetadata(pasta, "share", privadaAdmin,
-                certificadoAdmin.getPublicKey(), usuario.uid(), 7010, 7011, 7012, 7013);
-        List<ShareEntry> compartilhamentos = parseShare(share, arquivos);
+        byte[] share = openMetadata(folder, "share", adminPrivateKey,
+                adminCertificate.getPublicKey(), user.uid(), 7010, 7011, 7012, 7013);
+        List<ShareEntry> shares = parseShare(share, files);
 
-        List<FileEntry> permitidos = new ArrayList<>();
-        for (FileEntry arquivo : arquivos.values()) {
-            boolean compartilhado = compartilhamentos.stream().anyMatch(item ->
-                    item.code().equals(arquivo.code())
-                            && item.authorizedUser().equalsIgnoreCase(usuario.email()));
-            if (arquivo.owner().equalsIgnoreCase(usuario.email())
-                    || sameGroup(arquivo.group(), usuario.group()) || compartilhado) {
-                permitidos.add(arquivo);
+        List<FileEntry> allowed = new ArrayList<>();
+        for (FileEntry file : files.values()) {
+            boolean shared = shares.stream().anyMatch(item ->
+                    item.code().equals(file.code())
+                            && item.authorizedUser().equalsIgnoreCase(user.email()));
+            if (file.owner().equalsIgnoreCase(user.email())
+                    || sameGroup(file.group(), user.group()) || shared) {
+                allowed.add(file);
             }
         }
-        return new Catalog(pasta, List.copyOf(permitidos), Map.copyOf(arquivos),
-                List.copyOf(compartilhamentos));
+        return new Catalog(folder, List.copyOf(allowed), Map.copyOf(files),
+                List.copyOf(shares));
     }
 
-    private byte[] openMetadata(Path pasta, String nome, PrivateKey privada,
-            PublicKey publica, long uid, int midDecriptado, int midVerificado,
-            int midErroDecriptacao, int midErroAssinatura) throws Exception {
-        byte[] texto;
+    private byte[] openMetadata(Path folder, String name, PrivateKey privateKey,
+            PublicKey publicKey, long uid, int decryptedEvent, int verifiedEvent,
+            int decryptErrorEvent, int signatureErrorEvent) throws Exception {
+        byte[] text;
         try {
-            byte[] envelope = Files.readAllBytes(safeFile(pasta, nome + ".env"));
-            byte[] semente = CryptoUtils.openEnvelope(envelope, privada);
-            texto = CryptoUtils.decryptAes(
-                    Files.readAllBytes(safeFile(pasta, nome + ".enc")), semente);
-            banco.logEvent(midDecriptado, uid, null);
+            byte[] envelope = Files.readAllBytes(safeFile(folder, name + ".env"));
+            byte[] seed = CryptoUtils.openEnvelope(envelope, privateKey);
+            text = CryptoUtils.decryptAes(
+                    Files.readAllBytes(safeFile(folder, name + ".enc")), seed);
+            database.logEvent(decryptedEvent, uid, null);
         } catch (Exception error) {
-            banco.logEvent(midErroDecriptacao, uid, null);
-            throw new Exception("Falha ao decriptar o arquivo " + nome + ".");
+            database.logEvent(decryptErrorEvent, uid, null);
+            throw new Exception("Falha ao decriptar o arquivo " + name + ".");
         }
         try {
-            byte[] assinatura = Files.readAllBytes(safeFile(pasta, nome + ".asd"));
-            if (!CryptoUtils.verify(texto, assinatura, publica)) {
+            byte[] signature = Files.readAllBytes(safeFile(folder, name + ".asd"));
+            if (!CryptoUtils.verify(text, signature, publicKey)) {
                 throw new Exception();
             }
-            banco.logEvent(midVerificado, uid, null);
-            return texto;
+            database.logEvent(verifiedEvent, uid, null);
+            return text;
         } catch (Exception error) {
-            banco.logEvent(midErroAssinatura, uid, null);
-            throw new Exception("Assinatura inválida no arquivo " + nome + ".");
+            database.logEvent(signatureErrorEvent, uid, null);
+            throw new Exception("Assinatura inválida no arquivo " + name + ".");
         }
     }
 
-    private Map<String, FileEntry> parseIndex(byte[] dados) throws Exception {
-        Map<String, FileEntry> resultado = new LinkedHashMap<>();
-        for (String linha : asciiLines(dados)) {
-            String[] campos = linha.split(" +", -1);
-            if (campos.length != 4 || !campos[0].matches("[A-Za-z0-9]+")
-                    || !isSafeName(campos[1]) || campos[2].isBlank() || campos[3].isBlank()
-                    || resultado.containsKey(campos[0])) {
+    private Map<String, FileEntry> parseIndex(byte[] data) throws Exception {
+        Map<String, FileEntry> result = new LinkedHashMap<>();
+        for (String line : asciiLines(data)) {
+            String[] fields = line.split(" +", -1);
+            if (fields.length != 4 || !fields[0].matches("[A-Za-z0-9]+")
+                    || !isSafeName(fields[1]) || fields[2].isBlank() || fields[3].isBlank()
+                    || result.containsKey(fields[0])) {
                 throw new Exception("Linha inválida no arquivo index.");
             }
-            resultado.put(campos[0], new FileEntry(campos[0], campos[1], campos[2], campos[3]));
+            result.put(fields[0], new FileEntry(fields[0], fields[1], fields[2], fields[3]));
         }
-        return resultado;
+        return result;
     }
 
-    private List<ShareEntry> parseShare(byte[] dados,
-            Map<String, FileEntry> arquivos) throws Exception {
-        List<ShareEntry> resultado = new ArrayList<>();
-        Set<String> identificadores = new HashSet<>();
-        for (String linha : asciiLines(dados)) {
-            String[] campos = linha.split(" +", -1);
+    private List<ShareEntry> parseShare(byte[] data,
+            Map<String, FileEntry> files) throws Exception {
+        List<ShareEntry> result = new ArrayList<>();
+        Set<String> identifiers = new HashSet<>();
+        for (String line : asciiLines(data)) {
+            String[] fields = line.split(" +", -1);
             int id;
             try {
-                id = Integer.parseInt(campos.length > 1 ? campos[1] : "");
+                id = Integer.parseInt(fields.length > 1 ? fields[1] : "");
             } catch (NumberFormatException error) {
                 throw new Exception("ID inválido no arquivo share.");
             }
-            String chave = campos[0] + ":" + id;
-            if (campos.length != 3 || !campos[0].matches("[A-Za-z0-9]+") || id <= 0
-                    || campos[2].isBlank() || !arquivos.containsKey(campos[0])
-                    || !identificadores.add(chave)) {
+            String key = fields[0] + ":" + id;
+            if (fields.length != 3 || !fields[0].matches("[A-Za-z0-9]+") || id <= 0
+                    || fields[2].isBlank() || !identifiers.add(key)) {
                 throw new Exception("Linha inválida no arquivo share.");
             }
-            resultado.add(new ShareEntry(campos[0], id, campos[2]));
+            if (files.containsKey(fields[0])) {
+                result.add(new ShareEntry(fields[0], id, fields[2]));
+            }
         }
-        return resultado;
+        return result;
     }
 
-    private List<String> asciiLines(byte[] dados) throws Exception {
-        for (byte dado : dados) {
-            if ((dado & 0x80) != 0 || dado == '\r') {
-                throw new Exception("O índice deve usar texto ASCII e linhas separadas por \\n.");
+    private List<String> asciiLines(byte[] data) throws Exception {
+        for (byte value : data) {
+            if ((value & 0x80) != 0) {
+                throw new Exception("O índice deve usar texto ASCII.");
             }
         }
-        String texto = new String(dados, StandardCharsets.US_ASCII);
-        List<String> linhas = new ArrayList<>();
-        if (texto.isEmpty()) {
-            return linhas;
-        }
-        String[] partes = texto.split("\\n", -1);
-        for (int i = 0; i < partes.length; i++) {
-            if (i == partes.length - 1 && partes[i].isEmpty()) {
-                break;
+        String text = new String(data, StandardCharsets.US_ASCII);
+        List<String> lines = new ArrayList<>();
+        for (String line : text.split("\n")) {
+            line = line.strip();
+            if (!line.isEmpty()) {
+                lines.add(line);
             }
-            if (partes[i].isEmpty()) {
-                throw new Exception("Linha vazia no índice.");
-            }
-            linhas.add(partes[i]);
         }
-        return linhas;
+        return lines;
     }
 
-    public Path openFile(Catalog catalogo, FileEntry selecionado, Database.User usuario,
-            PrivateKey privadaUser, Path destino) throws Exception {
-        banco.logEvent(7015, usuario.uid(), selecionado.name());
-        FileEntry autentico = catalogo.files().get(selecionado.code());
-        ShareEntry compartilhamento = autentico == null ? null : catalogo.shares().stream()
-                .filter(item -> item.code().equals(autentico.code())
-                        && item.authorizedUser().equalsIgnoreCase(usuario.email()))
+    public Path openFile(Catalog catalog, FileEntry selected, Database.User user,
+            PrivateKey userPrivateKey, Path destination) throws Exception {
+        database.logEvent(7015, user.uid(), selected.name());
+        FileEntry file = catalog.files().get(selected.code());
+        ShareEntry share = file == null ? null : catalog.shares().stream()
+                .filter(item -> item.code().equals(file.code())
+                        && item.authorizedUser().equalsIgnoreCase(user.email()))
                 .findFirst().orElse(null);
-        boolean ehDono = autentico != null && autentico.owner().equalsIgnoreCase(usuario.email());
-        boolean permitido = autentico != null && autentico.equals(selecionado)
-                && catalogo.allowedFiles().contains(autentico)
-                && (ehDono || compartilhamento != null);
-        if (!permitido) {
-            banco.logEvent(7017, usuario.uid(), selecionado.name());
+        boolean isOwner = file != null && file.owner().equalsIgnoreCase(user.email());
+        // O mesmo grupo permite listar, mas só o dono (.env) e o destinatário (.shr) têm envelope.
+        boolean allowed = isOwner || share != null;
+        if (!allowed) {
+            database.logEvent(7017, user.uid(), selected.name());
             throw new Exception("Acesso negado ao arquivo selecionado.");
         }
-        banco.logEvent(7016, usuario.uid(), selecionado.name());
+        database.logEvent(7016, user.uid(), selected.name());
 
         Path envelope;
-        if (ehDono) {
-            envelope = catalogo.folder().resolve(autentico.code() + ".env");
+        if (isOwner) {
+            envelope = catalog.folder().resolve(file.code() + ".env");
         } else {
-            envelope = catalogo.folder().resolve(
-                    autentico.code() + "." + compartilhamento.id() + ".shr");
+            envelope = catalog.folder().resolve(file.code() + "." + share.id() + ".shr");
         }
 
-        byte[] texto;
+        byte[] text;
         try {
-            byte[] semente = CryptoUtils.openEnvelope(
-                    Files.readAllBytes(safeFile(catalogo.folder(), envelope.getFileName().toString())),
-                    privadaUser);
-            texto = CryptoUtils.decryptAes(
-                    Files.readAllBytes(safeFile(catalogo.folder(), autentico.code() + ".enc")),
-                    semente);
-            banco.logEvent(7018, usuario.uid(), autentico.name());
+            byte[] seed = CryptoUtils.openEnvelope(
+                    Files.readAllBytes(safeFile(catalog.folder(), envelope.getFileName().toString())),
+                    userPrivateKey);
+            text = CryptoUtils.decryptAes(
+                    Files.readAllBytes(safeFile(catalog.folder(), file.code() + ".enc")),
+                    seed);
+            database.logEvent(7018, user.uid(), file.name());
         } catch (Exception error) {
-            banco.logEvent(7020, usuario.uid(), autentico.name());
+            database.logEvent(7020, user.uid(), file.name());
             throw new Exception("Falha ao decriptar o arquivo selecionado.");
         }
 
         try {
-            Database.User dono = banco.findUser(autentico.owner());
-            Database.KeyEntry chaveDono = dono == null ? null : banco.findKeyEntry(dono.uid());
-            if (chaveDono == null) {
+            Database.User owner = database.findUser(file.owner());
+            Database.KeyEntry ownerKey = owner == null ? null : database.findKeyEntry(owner.uid());
+            if (ownerKey == null) {
                 throw new Exception();
             }
-            X509Certificate certificadoDono = CryptoUtils.loadCertificate(chaveDono.certificatePem());
-            byte[] assinatura = Files.readAllBytes(
-                    safeFile(catalogo.folder(), autentico.code() + ".asd"));
-            if (!CryptoUtils.verify(texto, assinatura, certificadoDono.getPublicKey())) {
+            X509Certificate ownerCertificate = CryptoUtils.loadCertificate(ownerKey.certificatePem());
+            byte[] signature = Files.readAllBytes(
+                    safeFile(catalog.folder(), file.code() + ".asd"));
+            if (!CryptoUtils.verify(text, signature, ownerCertificate.getPublicKey())) {
                 throw new Exception();
             }
-            banco.logEvent(7019, usuario.uid(), autentico.name());
+            database.logEvent(7019, user.uid(), file.name());
         } catch (Exception error) {
-            banco.logEvent(7021, usuario.uid(), autentico.name());
+            database.logEvent(7021, user.uid(), file.name());
             throw new Exception("Assinatura inválida no arquivo selecionado.");
         }
 
-        if (!isSafeName(autentico.name())) {
-            throw new Exception("Nome de saída inseguro.");
-        }
-        Path pastaDestino = destino.toAbsolutePath().normalize();
-        if (Files.exists(pastaDestino) && Files.isSymbolicLink(pastaDestino)) {
+        Path outputFolder = destination.toAbsolutePath().normalize();
+        if (Files.exists(outputFolder) && Files.isSymbolicLink(outputFolder)) {
             throw new Exception("A pasta de destino não pode ser um link simbólico.");
         }
-        Files.createDirectories(pastaDestino);
-        Path saida = pastaDestino.resolve(autentico.name()).normalize();
-        if (!saida.getParent().equals(pastaDestino) || Files.exists(saida)) {
+        Files.createDirectories(outputFolder);
+        Path output = outputFolder.resolve(file.name()).normalize();
+        if (!output.getParent().equals(outputFolder) || Files.exists(output)) {
             throw new Exception("O arquivo de saída já existe ou possui nome inválido.");
         }
-        Path temporario = Files.createTempFile(pastaDestino, ".cofre-", ".tmp");
+        Path temporary = Files.createTempFile(outputFolder, ".cofre-", ".tmp");
         try {
-            Files.write(temporario, texto, StandardOpenOption.TRUNCATE_EXISTING);
-            Files.move(temporario, saida);
+            Files.write(temporary, text, StandardOpenOption.TRUNCATE_EXISTING);
+            Files.move(temporary, output);
         } finally {
-            Files.deleteIfExists(temporario);
+            Files.deleteIfExists(temporary);
         }
-        return saida;
+        return output;
     }
 
-    private Path safeFile(Path pasta, String nome) throws Exception {
-        Path caminho = pasta.resolve(nome).normalize();
-        if (!caminho.getParent().equals(pasta) || Files.isSymbolicLink(caminho)
-                || !Files.isRegularFile(caminho, LinkOption.NOFOLLOW_LINKS)) {
-            throw new Exception("Arquivo ausente ou inseguro: " + nome);
+    private Path safeFile(Path folder, String name) throws Exception {
+        Path path = folder.resolve(name).normalize();
+        if (!path.getParent().equals(folder) || Files.isSymbolicLink(path)
+                || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+            throw new Exception("Arquivo ausente ou inseguro: " + name);
         }
-        return caminho;
+        return path;
     }
 
-    private boolean isSafeName(String nome) {
-        if (nome == null || nome.isBlank() || nome.equals(".") || nome.equals("..")) {
+    private boolean isSafeName(String name) {
+        if (name == null || name.isBlank() || name.equals(".") || name.equals("..")) {
             return false;
         }
-        Path path = Path.of(nome);
-        return path.getNameCount() == 1 && path.getFileName().toString().equals(nome)
-                && !nome.contains("/") && !nome.contains("\\");
+        Path path = Path.of(name);
+        return path.getNameCount() == 1 && path.getFileName().toString().equals(name)
+                && !name.contains("/") && !name.contains("\\");
     }
 
-    private boolean sameGroup(String primeiro, String segundo) {
-        String a = Normalizer.normalize(primeiro, Normalizer.Form.NFD)
+    // O index é ASCII: o grupo "Usuário" do banco aparece como "usuario" no arquivo.
+    private boolean sameGroup(String first, String second) {
+        String a = Normalizer.normalize(first, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "");
-        String b = Normalizer.normalize(segundo, Normalizer.Form.NFD)
+        String b = Normalizer.normalize(second, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "");
         return a.equalsIgnoreCase(b);
     }

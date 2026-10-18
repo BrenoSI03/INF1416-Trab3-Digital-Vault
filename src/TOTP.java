@@ -10,7 +10,8 @@ public class TOTP {
         if (timeStepInSeconds <= 0) {
             throw new Exception("Intervalo TOTP inválido.");
         }
-        byte[] decoded = new Base32().fromString(base32EncodedSecret);
+        byte[] decoded = new Base32(Base32.Alphabet.BASE32, false, false)
+                .fromString(base32EncodedSecret);
         if (decoded == null || decoded.length != 20) {
             throw new Exception("O segredo TOTP deve conter 20 bytes em Base32.");
         }

@@ -31,12 +31,12 @@ public class Database implements AutoCloseable {
             String login, String fileName) {
     }
 
-    private final Connection conexao;
+    private final Connection connection;
 
-    public Database(Path arquivo) throws Exception {
+    public Database(Path file) throws Exception {
         Class.forName("org.sqlite.JDBC");
-        conexao = DriverManager.getConnection("jdbc:sqlite:" + arquivo.toAbsolutePath());
-        try (Statement statement = conexao.createStatement()) {
+        connection = DriverManager.getConnection("jdbc:sqlite:" + file.toAbsolutePath());
+        try (Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA foreign_keys = ON");
             statement.execute("PRAGMA busy_timeout = 5000");
         }
@@ -44,7 +44,7 @@ public class Database implements AutoCloseable {
     }
 
     private void createSchema() throws SQLException {
-        try (Statement statement = conexao.createStatement()) {
+        try (Statement statement = connection.createStatement()) {
             statement.executeUpdate("""
                     CREATE TABLE IF NOT EXISTS Grupos (
                         gid INTEGER PRIMARY KEY,
@@ -91,101 +91,94 @@ public class Database implements AutoCloseable {
     }
 
     private void insertSeedData() throws SQLException {
-        try (PreparedStatement grupo = conexao.prepareStatement(
+        try (PreparedStatement group = connection.prepareStatement(
                 "INSERT OR IGNORE INTO Grupos(gid, nome) VALUES(?, ?)")) {
-            grupo.setInt(1, ADMIN_GROUP_ID);
-            grupo.setString(2, "Administrador");
-            grupo.executeUpdate();
-            grupo.setInt(1, USER_GROUP_ID);
-            grupo.setString(2, "Usuário");
-            grupo.executeUpdate();
+            group.setInt(1, ADMIN_GROUP_ID);
+            group.setString(2, "Administrador");
+            group.executeUpdate();
+            group.setInt(1, USER_GROUP_ID);
+            group.setString(2, "Usuário");
+            group.executeUpdate();
         }
-        try (PreparedStatement mensagem = conexao.prepareStatement(
+        try (PreparedStatement message = connection.prepareStatement(
                 "INSERT INTO Mensagens(mid, texto) VALUES(?, ?) "
                         + "ON CONFLICT(mid) DO UPDATE SET texto=excluded.texto")) {
             for (Map.Entry<Integer, String> item : officialMessages().entrySet()) {
-                mensagem.setInt(1, item.getKey());
-                mensagem.setString(2, item.getValue());
-                mensagem.addBatch();
+                message.setInt(1, item.getKey());
+                message.setString(2, item.getValue());
+                message.addBatch();
             }
-            mensagem.executeBatch();
+            message.executeBatch();
         }
     }
 
     private static Map<Integer, String> officialMessages() {
-        Map<Integer, String> mensagens = new LinkedHashMap<>();
-        mensagens.put(1001, "Sistema iniciado.");
-        mensagens.put(1002, "Sistema encerrado.");
-        mensagens.put(1003, "Sessão iniciada para <login_name>.");
-        mensagens.put(1004, "Sessão encerrada para <login_name>.");
-        mensagens.put(1005, "Partida do sistema iniciada para cadastro do administrador.");
-        mensagens.put(1006, "Partida do sistema iniciada para operação normal pelos usuários.");
-        mensagens.put(2001, "Autenticação etapa 1 iniciada.");
-        mensagens.put(2002, "Autenticação etapa 1 encerrada.");
-        mensagens.put(2003, "Login name <login_name> identificado com acesso liberado.");
-        mensagens.put(2004, "Login name <login_name> identificado com acesso bloqueado.");
-        mensagens.put(2005, "Login name <login_name> não identificado.");
-        mensagens.put(3001, "Autenticação etapa 2 iniciada para <login_name>.");
-        mensagens.put(3002, "Autenticação etapa 2 encerrada para <login_name>.");
-        mensagens.put(3003, "Senha pessoal verificada positivamente para <login_name>.");
-        mensagens.put(3004, "Primeiro erro da senha pessoal contabilizado para <login_name>.");
-        mensagens.put(3005, "Segundo erro da senha pessoal contabilizado para <login_name>.");
-        mensagens.put(3006, "Terceiro erro da senha pessoal contabilizado para <login_name>.");
-        mensagens.put(3007, "Acesso do usuario <login_name> bloqueado pela autenticação etapa 2.");
-        mensagens.put(4001, "Autenticação etapa 3 iniciada para <login_name>.");
-        mensagens.put(4002, "Autenticação etapa 3 encerrada para <login_name>.");
-        mensagens.put(4003, "Token verificado positivamente para <login_name>.");
-        mensagens.put(4004, "Primeiro erro de token contabilizado para <login_name>.");
-        mensagens.put(4005, "Segundo erro de token contabilizado para <login_name>.");
-        mensagens.put(4006, "Terceiro erro de token contabilizado para <login_name>.");
-        mensagens.put(4007, "Acesso do usuario <login_name> bloqueado pela autenticação etapa 3.");
-        mensagens.put(5001, "Tela principal apresentada para <login_name>.");
-        mensagens.put(5002, "Opção 1 do menu principal selecionada por <login_name>.");
-        mensagens.put(5003, "Opção 2 do menu principal selecionada por <login_name>.");
-        mensagens.put(5004, "Opção 3 do menu principal selecionada por <login_name>.");
-        mensagens.put(6001, "Tela de cadastro apresentada para <login_name>.");
-        mensagens.put(6002, "Botão cadastrar pressionado por <login_name>.");
-        mensagens.put(6003, "Senha pessoal inválida fornecida por <login_name>.");
-        mensagens.put(6004, "Caminho do certificado digital inválido fornecido por <login_name>.");
-        mensagens.put(6005, "Chave privada verificada negativamente para <login_name> (caminho inválido).");
-        mensagens.put(6006, "Chave privada verificada negativamente para <login_name> (frase secreta inválida).");
-        mensagens.put(6007, "Chave privada verificada negativamente para <login_name> (assinatura digital inválida).");
-        mensagens.put(6008, "Confirmação de dados aceita por <login_name>.");
-        mensagens.put(6009, "Confirmação de dados rejeitada por <login_name>.");
-        mensagens.put(6010, "Botão voltar de cadastro para o menu principal pressionado por <login_name>.");
-        mensagens.put(7001, "Tela de consulta de arquivos secretos apresentada para <login_name>.");
-        mensagens.put(7002, "Botão voltar de consulta para o menu principal pressionado por <login_name>.");
-        mensagens.put(7003, "Botão Listar de consulta pressionado por <login_name>.");
-        mensagens.put(7004, "Caminho de pasta inválido fornecido por <login_name>.");
-        mensagens.put(7005, "Arquivo de índice decriptado com sucesso para <login_name>.");
-        mensagens.put(7006, "Arquivo de índice verificado (integridade e autenticidade) com sucesso para <login_name>.");
-        mensagens.put(7007, "Falha na decriptação do arquivo de índice para <login_name>.");
-        mensagens.put(7008, "Falha na verificação (integridade e autenticidade) do arquivo de índice para <login_name>.");
-        mensagens.put(7009, "Lista de arquivos presentes no índice apresentada para <login_name>.");
-        mensagens.put(7010, "Arquivo de share decriptado com sucesso para <login_name>.");
-        mensagens.put(7011, "Arquivo de share verificado (integridade e autenticidade) com sucesso para <login_name>.");
-        mensagens.put(7012, "Falha na decriptação do arquivo de share para <login_name>.");
-        mensagens.put(7013, "Falha na verificação (integridade e autenticidade) do arquivo de share para <login_name>.");
-        mensagens.put(7014, "Lista de arquivos presentes no share apresentada para <login_name>.");
-        mensagens.put(7015, "Arquivo <arq_name> selecionado por <login_name> para decriptação.");
-        mensagens.put(7016, "Acesso permitido ao arquivo <arq_name> para <login_name>.");
-        mensagens.put(7017, "Acesso negado ao arquivo <arq_name> para <login_name>.");
-        mensagens.put(7018, "Arquivo <arq_name> decriptado com sucesso para <login_name>.");
-        mensagens.put(7019, "Arquivo <arq_name> verificado (integridade e autenticidade) com sucesso para <login_name>.");
-        mensagens.put(7020, "Falha na decriptação do arquivo <arq_name> para <login_name>.");
-        mensagens.put(7021, "Falha na verificação (integridade e autenticidade) do arquivo <arq_name> para <login_name>.");
-        mensagens.put(8001, "Tela de saída apresentada para <login_name>.");
-        mensagens.put(8002, "Botão encerrar sessão pressionado por <login_name>.");
-        mensagens.put(8003, "Botão encerrar sistema pressionado por <login_name>.");
-        mensagens.put(8004, "Botão voltar de sair para o menu principal pressionado por <login_name>.");
-        return mensagens;
-    }
-
-    public int countMessages() throws SQLException {
-        try (Statement statement = conexao.createStatement();
-                ResultSet result = statement.executeQuery("SELECT COUNT(*) FROM Mensagens")) {
-            return result.getInt(1);
-        }
+        Map<Integer, String> messages = new LinkedHashMap<>();
+        messages.put(1001, "Sistema iniciado.");
+        messages.put(1002, "Sistema encerrado.");
+        messages.put(1003, "Sessão iniciada para <login_name>.");
+        messages.put(1004, "Sessão encerrada para <login_name>.");
+        messages.put(1005, "Partida do sistema iniciada para cadastro do administrador.");
+        messages.put(1006, "Partida do sistema iniciada para operação normal pelos usuários.");
+        messages.put(2001, "Autenticação etapa 1 iniciada.");
+        messages.put(2002, "Autenticação etapa 1 encerrada.");
+        messages.put(2003, "Login name <login_name> identificado com acesso liberado.");
+        messages.put(2004, "Login name <login_name> identificado com acesso bloqueado.");
+        messages.put(2005, "Login name <login_name> não identificado.");
+        messages.put(3001, "Autenticação etapa 2 iniciada para <login_name>.");
+        messages.put(3002, "Autenticação etapa 2 encerrada para <login_name>.");
+        messages.put(3003, "Senha pessoal verificada positivamente para <login_name>.");
+        messages.put(3004, "Primeiro erro da senha pessoal contabilizado para <login_name>.");
+        messages.put(3005, "Segundo erro da senha pessoal contabilizado para <login_name>.");
+        messages.put(3006, "Terceiro erro da senha pessoal contabilizado para <login_name>.");
+        messages.put(3007, "Acesso do usuario <login_name> bloqueado pela autenticação etapa 2.");
+        messages.put(4001, "Autenticação etapa 3 iniciada para <login_name>.");
+        messages.put(4002, "Autenticação etapa 3 encerrada para <login_name>.");
+        messages.put(4003, "Token verificado positivamente para <login_name>.");
+        messages.put(4004, "Primeiro erro de token contabilizado para <login_name>.");
+        messages.put(4005, "Segundo erro de token contabilizado para <login_name>.");
+        messages.put(4006, "Terceiro erro de token contabilizado para <login_name>.");
+        messages.put(4007, "Acesso do usuario <login_name> bloqueado pela autenticação etapa 3.");
+        messages.put(5001, "Tela principal apresentada para <login_name>.");
+        messages.put(5002, "Opção 1 do menu principal selecionada por <login_name>.");
+        messages.put(5003, "Opção 2 do menu principal selecionada por <login_name>.");
+        messages.put(5004, "Opção 3 do menu principal selecionada por <login_name>.");
+        messages.put(6001, "Tela de cadastro apresentada para <login_name>.");
+        messages.put(6002, "Botão cadastrar pressionado por <login_name>.");
+        messages.put(6003, "Senha pessoal inválida fornecida por <login_name>.");
+        messages.put(6004, "Caminho do certificado digital inválido fornecido por <login_name>.");
+        messages.put(6005, "Chave privada verificada negativamente para <login_name> (caminho inválido).");
+        messages.put(6006, "Chave privada verificada negativamente para <login_name> (frase secreta inválida).");
+        messages.put(6007, "Chave privada verificada negativamente para <login_name> (assinatura digital inválida).");
+        messages.put(6008, "Confirmação de dados aceita por <login_name>.");
+        messages.put(6009, "Confirmação de dados rejeitada por <login_name>.");
+        messages.put(6010, "Botão voltar de cadastro para o menu principal pressionado por <login_name>.");
+        messages.put(7001, "Tela de consulta de arquivos secretos apresentada para <login_name>.");
+        messages.put(7002, "Botão voltar de consulta para o menu principal pressionado por <login_name>.");
+        messages.put(7003, "Botão Listar de consulta pressionado por <login_name>.");
+        messages.put(7004, "Caminho de pasta inválido fornecido por <login_name>.");
+        messages.put(7005, "Arquivo de índice decriptado com sucesso para <login_name>.");
+        messages.put(7006, "Arquivo de índice verificado (integridade e autenticidade) com sucesso para <login_name>.");
+        messages.put(7007, "Falha na decriptação do arquivo de índice para <login_name>.");
+        messages.put(7008, "Falha na verificação (integridade e autenticidade) do arquivo de índice para <login_name>.");
+        messages.put(7009, "Lista de arquivos presentes no índice apresentada para <login_name>.");
+        messages.put(7010, "Arquivo de share decriptado com sucesso para <login_name>.");
+        messages.put(7011, "Arquivo de share verificado (integridade e autenticidade) com sucesso para <login_name>.");
+        messages.put(7012, "Falha na decriptação do arquivo de share para <login_name>.");
+        messages.put(7013, "Falha na verificação (integridade e autenticidade) do arquivo de share para <login_name>.");
+        messages.put(7014, "Lista de arquivos presentes no share apresentada para <login_name>.");
+        messages.put(7015, "Arquivo <arq_name> selecionado por <login_name> para decriptação.");
+        messages.put(7016, "Acesso permitido ao arquivo <arq_name> para <login_name>.");
+        messages.put(7017, "Acesso negado ao arquivo <arq_name> para <login_name>.");
+        messages.put(7018, "Arquivo <arq_name> decriptado com sucesso para <login_name>.");
+        messages.put(7019, "Arquivo <arq_name> verificado (integridade e autenticidade) com sucesso para <login_name>.");
+        messages.put(7020, "Falha na decriptação do arquivo <arq_name> para <login_name>.");
+        messages.put(7021, "Falha na verificação (integridade e autenticidade) do arquivo <arq_name> para <login_name>.");
+        messages.put(8001, "Tela de saída apresentada para <login_name>.");
+        messages.put(8002, "Botão encerrar sessão pressionado por <login_name>.");
+        messages.put(8003, "Botão encerrar sistema pressionado por <login_name>.");
+        messages.put(8004, "Botão voltar de sair para o menu principal pressionado por <login_name>.");
+        return messages;
     }
 
     public boolean hasUsers() throws SQLException {
@@ -193,14 +186,14 @@ public class Database implements AutoCloseable {
     }
 
     public int countUsers() throws SQLException {
-        try (Statement statement = conexao.createStatement();
+        try (Statement statement = connection.createStatement();
                 ResultSet result = statement.executeQuery("SELECT COUNT(*) FROM Usuarios")) {
             return result.getInt(1);
         }
     }
 
     public User findAdministrator() throws SQLException {
-        try (PreparedStatement statement = conexao.prepareStatement(
+        try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT u.*, g.nome grupo FROM Usuarios u JOIN Grupos g ON g.gid=u.gid "
                         + "WHERE u.gid=? ORDER BY u.uid LIMIT 1")) {
             statement.setInt(1, ADMIN_GROUP_ID);
@@ -211,7 +204,7 @@ public class Database implements AutoCloseable {
     }
 
     public User findUser(String email) throws SQLException {
-        try (PreparedStatement statement = conexao.prepareStatement(
+        try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT u.*, g.nome grupo FROM Usuarios u JOIN Grupos g ON g.gid=u.gid WHERE u.email=?")) {
             statement.setString(1, email);
             try (ResultSet result = statement.executeQuery()) {
@@ -221,7 +214,7 @@ public class Database implements AutoCloseable {
     }
 
     public User findUser(long uid) throws SQLException {
-        try (PreparedStatement statement = conexao.prepareStatement(
+        try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT u.*, g.nome grupo FROM Usuarios u JOIN Grupos g ON g.gid=u.gid WHERE u.uid=?")) {
             statement.setLong(1, uid);
             try (ResultSet result = statement.executeQuery()) {
@@ -240,7 +233,7 @@ public class Database implements AutoCloseable {
     }
 
     public KeyEntry findKeyEntry(long uid) throws SQLException {
-        try (PreparedStatement statement = conexao.prepareStatement(
+        try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT * FROM Chaveiro WHERE uid=?")) {
             statement.setLong(1, uid);
             try (ResultSet result = statement.executeQuery()) {
@@ -253,45 +246,45 @@ public class Database implements AutoCloseable {
         }
     }
 
-    public long insertUser(String nome, String email, int gid, String kid,
-            String hashSenha, byte[] segredoTotp, byte[] certificadoPem,
-            byte[] chavePrivadaCifrada) throws SQLException {
-        boolean autoCommit = conexao.getAutoCommit();
-        conexao.setAutoCommit(false);
+    public long insertUser(String name, String email, int gid, String kid,
+            String passwordHash, byte[] encryptedTotpSecret, byte[] certificatePem,
+            byte[] encryptedPrivateKey) throws SQLException {
+        boolean autoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
         try {
             long uid;
-            try (PreparedStatement usuario = conexao.prepareStatement("""
+            try (PreparedStatement user = connection.prepareStatement("""
                     INSERT INTO Usuarios(nome,email,gid,kid,hash_senha,segredo_totp)
                     VALUES(?,?,?,?,?,?)""", Statement.RETURN_GENERATED_KEYS)) {
-                usuario.setString(1, nome);
-                usuario.setString(2, email);
-                usuario.setInt(3, gid);
-                usuario.setString(4, kid);
-                usuario.setString(5, hashSenha);
-                usuario.setBytes(6, segredoTotp);
-                usuario.executeUpdate();
-                try (ResultSet keys = usuario.getGeneratedKeys()) {
+                user.setString(1, name);
+                user.setString(2, email);
+                user.setInt(3, gid);
+                user.setString(4, kid);
+                user.setString(5, passwordHash);
+                user.setBytes(6, encryptedTotpSecret);
+                user.executeUpdate();
+                try (ResultSet keys = user.getGeneratedKeys()) {
                     if (!keys.next()) {
                         throw new SQLException("UID não foi gerado.");
                     }
                     uid = keys.getLong(1);
                 }
             }
-            try (PreparedStatement chaveiro = conexao.prepareStatement(
+            try (PreparedStatement keyEntry = connection.prepareStatement(
                     "INSERT INTO Chaveiro(kid,uid,certificado_pem,chave_privada_cifrada) VALUES(?,?,?,?)")) {
-                chaveiro.setString(1, kid);
-                chaveiro.setLong(2, uid);
-                chaveiro.setBytes(3, certificadoPem);
-                chaveiro.setBytes(4, chavePrivadaCifrada);
-                chaveiro.executeUpdate();
+                keyEntry.setString(1, kid);
+                keyEntry.setLong(2, uid);
+                keyEntry.setBytes(3, certificatePem);
+                keyEntry.setBytes(4, encryptedPrivateKey);
+                keyEntry.executeUpdate();
             }
-            conexao.commit();
+            connection.commit();
             return uid;
         } catch (SQLException error) {
-            conexao.rollback();
+            connection.rollback();
             throw error;
         } finally {
-            conexao.setAutoCommit(autoCommit);
+            connection.setAutoCommit(autoCommit);
         }
     }
 
@@ -300,16 +293,16 @@ public class Database implements AutoCloseable {
     }
 
     int recordPasswordFailure(long uid, long currentTimeMillis) throws SQLException {
-        int erros = findUser(uid).passwordFailures() + 1;
-        boolean bloquear = erros >= 3;
-        try (PreparedStatement statement = conexao.prepareStatement(
+        int failures = findUser(uid).passwordFailures() + 1;
+        boolean lock = failures >= 3;
+        try (PreparedStatement statement = connection.prepareStatement(
                 "UPDATE Usuarios SET erros_senha=?, bloqueado_ate=? WHERE uid=?")) {
-            statement.setInt(1, bloquear ? 0 : erros);
-            statement.setLong(2, bloquear ? currentTimeMillis + 120_000L : 0);
+            statement.setInt(1, lock ? 0 : failures);
+            statement.setLong(2, lock ? currentTimeMillis + 120_000L : 0);
             statement.setLong(3, uid);
             statement.executeUpdate();
         }
-        return erros;
+        return failures;
     }
 
     public int recordTokenFailure(long uid) throws SQLException {
@@ -317,16 +310,16 @@ public class Database implements AutoCloseable {
     }
 
     int recordTokenFailure(long uid, long currentTimeMillis) throws SQLException {
-        int erros = findUser(uid).tokenFailures() + 1;
-        boolean bloquear = erros >= 3;
-        try (PreparedStatement statement = conexao.prepareStatement(
+        int failures = findUser(uid).tokenFailures() + 1;
+        boolean lock = failures >= 3;
+        try (PreparedStatement statement = connection.prepareStatement(
                 "UPDATE Usuarios SET erros_token=?, bloqueado_ate=? WHERE uid=?")) {
-            statement.setInt(1, bloquear ? 0 : erros);
-            statement.setLong(2, bloquear ? currentTimeMillis + 120_000L : 0);
+            statement.setInt(1, lock ? 0 : failures);
+            statement.setLong(2, lock ? currentTimeMillis + 120_000L : 0);
             statement.setLong(3, uid);
             statement.executeUpdate();
         }
-        return erros;
+        return failures;
     }
 
     public void clearPasswordFailures(long uid) throws SQLException {
@@ -342,7 +335,7 @@ public class Database implements AutoCloseable {
     }
 
     void clearExpiredLock(long uid, long currentTimeMillis) throws SQLException {
-        try (PreparedStatement statement = conexao.prepareStatement(
+        try (PreparedStatement statement = connection.prepareStatement(
                 "UPDATE Usuarios SET bloqueado_ate=0 WHERE uid=? AND bloqueado_ate<=?")) {
             statement.setLong(1, uid);
             statement.setLong(2, currentTimeMillis);
@@ -359,14 +352,14 @@ public class Database implements AutoCloseable {
     }
 
     private void updateUser(String sql, long uid) throws SQLException {
-        try (PreparedStatement statement = conexao.prepareStatement(sql)) {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setLong(1, uid);
             statement.executeUpdate();
         }
     }
 
-    public void logEvent(int mid, Long uid, String arquivo) throws SQLException {
-        try (PreparedStatement statement = conexao.prepareStatement(
+    public void logEvent(int mid, Long uid, String fileName) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
                 "INSERT INTO Registros(data_hora,mid,uid,arquivo) VALUES(?,?,?,?)")) {
             statement.setLong(1, System.currentTimeMillis());
             statement.setInt(2, mid);
@@ -375,30 +368,30 @@ public class Database implements AutoCloseable {
             } else {
                 statement.setLong(3, uid);
             }
-            statement.setString(4, arquivo);
+            statement.setString(4, fileName);
             statement.executeUpdate();
         }
     }
 
     public List<LogEntry> listLogs() throws SQLException {
-        List<LogEntry> registros = new ArrayList<>();
+        List<LogEntry> logs = new ArrayList<>();
         String sql = """
                 SELECT r.rid,r.data_hora,r.mid,m.texto,u.email,r.arquivo
                 FROM Registros r
                 JOIN Mensagens m ON m.mid=r.mid
                 LEFT JOIN Usuarios u ON u.uid=r.uid
                 ORDER BY r.data_hora ASC,r.rid ASC""";
-        try (Statement statement = conexao.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
             while (result.next()) {
-                registros.add(new LogEntry(result.getLong(1), result.getLong(2), result.getInt(3),
+                logs.add(new LogEntry(result.getLong(1), result.getLong(2), result.getInt(3),
                         result.getString(4), result.getString(5), result.getString(6)));
             }
         }
-        return registros;
+        return logs;
     }
 
     @Override
     public void close() throws SQLException {
-        conexao.close();
+        connection.close();
     }
 }

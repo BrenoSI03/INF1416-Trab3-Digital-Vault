@@ -5,8 +5,6 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyFactory;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
@@ -27,69 +25,65 @@ public final class CryptoUtils {
     private CryptoUtils() {
     }
 
-    public static SecretKey generateAesKey(char[] segredo) throws Exception {
-        ByteBuffer codificado = StandardCharsets.UTF_8.encode(CharBuffer.wrap(segredo));
-        byte[] semente = new byte[codificado.remaining()];
-        codificado.get(semente);
+    public static SecretKey generateAesKey(char[] secret) throws Exception {
+        ByteBuffer encoded = StandardCharsets.UTF_8.encode(CharBuffer.wrap(secret));
+        byte[] seed = new byte[encoded.remaining()];
+        encoded.get(seed);
         try {
-            return generateAesKey(semente);
+            return generateAesKey(seed);
         } finally {
-            Arrays.fill(semente, (byte) 0);
-            if (codificado.hasArray()) {
-                Arrays.fill(codificado.array(), (byte) 0);
+            Arrays.fill(seed, (byte) 0);
+            if (encoded.hasArray()) {
+                Arrays.fill(encoded.array(), (byte) 0);
             }
         }
     }
 
-    public static SecretKey generateAesKey(byte[] semente) throws Exception {
+    public static SecretKey generateAesKey(byte[] seed) throws Exception {
         SecureRandom random = SecureRandom.getInstance("SHA1PRNG");
-        random.setSeed(semente);
+        random.setSeed(seed);
         KeyGenerator generator = KeyGenerator.getInstance("AES");
         generator.init(256, random);
         return generator.generateKey();
     }
 
-    public static byte[] encryptAes(byte[] texto, char[] segredo) throws Exception {
-        return processAes(Cipher.ENCRYPT_MODE, texto, generateAesKey(segredo));
+    public static byte[] encryptAes(byte[] plainText, char[] secret) throws Exception {
+        return processAes(Cipher.ENCRYPT_MODE, plainText, generateAesKey(secret));
     }
 
-    public static byte[] decryptAes(byte[] cifra, char[] segredo) throws Exception {
-        return processAes(Cipher.DECRYPT_MODE, cifra, generateAesKey(segredo));
+    public static byte[] decryptAes(byte[] cipherText, char[] secret) throws Exception {
+        return processAes(Cipher.DECRYPT_MODE, cipherText, generateAesKey(secret));
     }
 
-    public static byte[] encryptAes(byte[] texto, byte[] semente) throws Exception {
-        return processAes(Cipher.ENCRYPT_MODE, texto, generateAesKey(semente));
+    public static byte[] decryptAes(byte[] cipherText, byte[] seed) throws Exception {
+        return processAes(Cipher.DECRYPT_MODE, cipherText, generateAesKey(seed));
     }
 
-    public static byte[] decryptAes(byte[] cifra, byte[] semente) throws Exception {
-        return processAes(Cipher.DECRYPT_MODE, cifra, generateAesKey(semente));
-    }
-
-    private static byte[] processAes(int modo, byte[] dados, SecretKey chave) throws Exception {
+    private static byte[] processAes(int mode, byte[] data, SecretKey key) throws Exception {
         Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-        cipher.init(modo, chave);
-        return cipher.doFinal(dados);
+        cipher.init(mode, key);
+        return cipher.doFinal(data);
     }
 
-    public static PrivateKey loadPrivateKey(Path arquivo, char[] frase) throws Exception {
-        byte[] conteudo = decryptAes(Files.readAllBytes(arquivo), frase);
+    public static PrivateKey loadPrivateKey(Path file, char[] passphrase) throws Exception {
+        byte[] content = decryptAes(Files.readAllBytes(file), passphrase);
         try {
-            return restorePrivateKey(conteudo);
+            return restorePrivateKey(content);
         } finally {
-            Arrays.fill(conteudo, (byte) 0);
+            Arrays.fill(content, (byte) 0);
         }
     }
 
-    public static PrivateKey restorePrivateKey(byte[] conteudoDecriptado) throws Exception {
-        String texto = new String(conteudoDecriptado, StandardCharsets.US_ASCII).trim();
-        String inicio = "-----BEGIN PRIVATE KEY-----";
-        String fim = "-----END PRIVATE KEY-----";
-        if (texto.startsWith(inicio) && texto.endsWith(fim)) {
-            texto = texto.substring(inicio.length(), texto.length() - fim.length());
-        } else if (texto.contains("-----")) {
+    public static PrivateKey restorePrivateKey(byte[] decryptedContent) throws Exception {
+        String text = new String(decryptedContent, StandardCharsets.US_ASCII).trim();
+        String begin = "-----BEGIN PRIVATE KEY-----";
+        String end = "-----END PRIVATE KEY-----";
+        if (text.startsWith(begin) && text.endsWith(end)) {
+            text = text.substring(begin.length(), text.length() - end.length());
+        } else if (text.contains("-----")) {
             throw new IllegalArgumentException("Chave privada não contém PKCS#8 em PEM/Base64.");
         }
-        String base64 = texto.replaceAll("\\s+", "");
+        String base64 = text.replaceAll("\\s+", "");
         if (base64.isEmpty()) {
             throw new IllegalArgumentException("Chave privada não contém PKCS#8 em PEM/Base64.");
         }
@@ -101,97 +95,83 @@ public final class CryptoUtils {
         }
     }
 
-    public static X509Certificate loadCertificate(Path arquivo) throws Exception {
-        try (var input = Files.newInputStream(arquivo)) {
-            return (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(input);
-        }
-    }
-
     public static X509Certificate loadCertificate(byte[] pem) throws Exception {
         return (X509Certificate) CertificateFactory.getInstance("X.509")
                 .generateCertificate(new ByteArrayInputStream(pem));
     }
 
-    public static boolean proveKeyPair(PrivateKey privada, PublicKey publica, int tamanho) throws Exception {
-        byte[] desafio = new byte[tamanho];
-        new SecureRandom().nextBytes(desafio);
-        byte[] assinatura = sign(desafio, privada);
-        return verify(desafio, assinatura, publica);
+    public static boolean proveKeyPair(PrivateKey privateKey, PublicKey publicKey, int size)
+            throws Exception {
+        byte[] challenge = new byte[size];
+        new SecureRandom().nextBytes(challenge);
+        byte[] signature = sign(challenge, privateKey);
+        return verify(challenge, signature, publicKey);
     }
 
-    public static byte[] sign(byte[] dados, PrivateKey privada) throws Exception {
-        Signature assinatura = Signature.getInstance("SHA1withRSA");
-        assinatura.initSign(privada);
-        assinatura.update(dados);
-        return assinatura.sign();
+    public static byte[] sign(byte[] data, PrivateKey privateKey) throws Exception {
+        Signature signature = Signature.getInstance("SHA1withRSA");
+        signature.initSign(privateKey);
+        signature.update(data);
+        return signature.sign();
     }
 
-    public static boolean verify(byte[] dados, byte[] assinaturaBinaria, PublicKey publica) throws Exception {
-        Signature assinatura = Signature.getInstance("SHA1withRSA");
-        assinatura.initVerify(publica);
-        assinatura.update(dados);
-        return assinatura.verify(assinaturaBinaria);
+    public static boolean verify(byte[] data, byte[] signatureBytes, PublicKey publicKey)
+            throws Exception {
+        Signature signature = Signature.getInstance("SHA1withRSA");
+        signature.initVerify(publicKey);
+        signature.update(data);
+        return signature.verify(signatureBytes);
     }
 
-    public static byte[] openEnvelope(byte[] envelope, PrivateKey privada) throws Exception {
+    public static byte[] openEnvelope(byte[] envelope, PrivateKey privateKey) throws Exception {
         Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-        cipher.init(Cipher.DECRYPT_MODE, privada);
+        cipher.init(Cipher.DECRYPT_MODE, privateKey);
         return cipher.doFinal(envelope);
     }
 
-    public static byte[] createEnvelope(byte[] semente, PublicKey publica) throws Exception {
-        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-        cipher.init(Cipher.ENCRYPT_MODE, publica);
-        return cipher.doFinal(semente);
-    }
-
-    public static String generateBcrypt(char[] senha) {
+    public static String generateBcrypt(char[] password) {
         byte[] salt = new byte[16];
         new SecureRandom().nextBytes(salt);
-        return OpenBSDBCrypt.generate("2y", senha, salt, 8);
+        return OpenBSDBCrypt.generate("2y", password, salt, 8);
     }
 
-    public static boolean verifyBcrypt(String hash, char[] senha) {
+    public static boolean verifyBcrypt(String hash, char[] password) {
         try {
             return hash != null && hash.length() == 60 && hash.startsWith("$2y$08$")
-                    && OpenBSDBCrypt.checkPassword(hash, senha);
+                    && OpenBSDBCrypt.checkPassword(hash, password);
         } catch (RuntimeException error) {
             return false;
         }
     }
 
-    public static String extractName(X509Certificate certificado) throws Exception {
-        return subjectAttribute(certificado, "CN");
+    public static String extractName(X509Certificate certificate) throws Exception {
+        return subjectAttribute(certificate, "CN");
     }
 
-    public static String extractEmail(X509Certificate certificado) throws Exception {
-        return subjectAttribute(certificado, "EMAILADDRESS");
+    public static String extractEmail(X509Certificate certificate) throws Exception {
+        return subjectAttribute(certificate, "EMAILADDRESS");
     }
 
-    private static String subjectAttribute(X509Certificate certificado, String tipo) throws Exception {
-        LdapName nome = new LdapName(certificado.getSubjectX500Principal().getName());
-        for (Rdn item : nome.getRdns()) {
-            if (tipo.equalsIgnoreCase(item.getType())
-                    || ("EMAILADDRESS".equals(tipo) && "1.2.840.113549.1.9.1".equals(item.getType()))) {
-                Object valor = item.getValue();
-                if (valor instanceof byte[] bytes && bytes.length > 2) {
+    private static String subjectAttribute(X509Certificate certificate, String type)
+            throws Exception {
+        LdapName name = new LdapName(certificate.getSubjectX500Principal().getName());
+        for (Rdn item : name.getRdns()) {
+            if (type.equalsIgnoreCase(item.getType())
+                    || ("EMAILADDRESS".equals(type) && "1.2.840.113549.1.9.1".equals(item.getType()))) {
+                Object value = item.getValue();
+                // Sem nome conhecido para o OID, o e-mail vem em DER: 2 bytes de cabeçalho + texto.
+                if (value instanceof byte[] bytes && bytes.length > 2) {
                     return new String(bytes, 2, bytes.length - 2, StandardCharsets.UTF_8);
                 }
-                return String.valueOf(valor);
+                return String.valueOf(value);
             }
         }
         return null;
     }
 
-    public static KeyPair generateRsaKeyPair() throws Exception {
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-        generator.initialize(2048);
-        return generator.generateKeyPair();
-    }
-
-    public static void clear(char[] segredo) {
-        if (segredo != null) {
-            Arrays.fill(segredo, '\0');
+    public static void clear(char[] secret) {
+        if (secret != null) {
+            Arrays.fill(secret, '\0');
         }
     }
 }

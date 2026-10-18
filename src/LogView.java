@@ -18,40 +18,40 @@ public class LogView {
             System.err.println("É necessário executar em um terminal com leitura de senha sem eco.");
             return;
         }
-        char[] frase = console.readPassword("Frase secreta da chave do administrador: ");
+        char[] passphrase = console.readPassword("Frase secreta da chave do administrador: ");
         try {
             Path databaseFile = Path.of(args.length == 2 ? args[1] : "cofre.db");
-            if (frase == null || !Files.isRegularFile(databaseFile)) {
+            if (passphrase == null || !Files.isRegularFile(databaseFile)) {
                 throw new Exception("Banco de dados ou frase secreta indisponível.");
             }
-            try (Database banco = new Database(databaseFile)) {
-                Database.User administrador = banco.findAdministrator();
-                if (administrador == null || !administrador.isAdministrator()) {
+            try (Database database = new Database(databaseFile)) {
+                Database.User admin = database.findAdministrator();
+                if (admin == null || !admin.isAdministrator()) {
                     throw new Exception("Administrador não cadastrado.");
                 }
-                Database.KeyEntry chaveiro = banco.findKeyEntry(administrador.uid());
-                X509Certificate certificado = CryptoUtils.loadCertificate(chaveiro.certificatePem());
-                PrivateKey privada = CryptoUtils.loadPrivateKey(Path.of(args[0]), frase);
-                if (!CryptoUtils.proveKeyPair(privada, certificado.getPublicKey(), 2_048)) {
+                Database.KeyEntry keyEntry = database.findKeyEntry(admin.uid());
+                X509Certificate certificate = CryptoUtils.loadCertificate(keyEntry.certificatePem());
+                PrivateKey privateKey = CryptoUtils.loadPrivateKey(Path.of(args[0]), passphrase);
+                if (!CryptoUtils.proveKeyPair(privateKey, certificate.getPublicKey(), 2_048)) {
                     throw new Exception("Chave privada não autorizada.");
                 }
-                DateTimeFormatter formato = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss.SSS")
+                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss.SSS")
                         .withZone(ZoneId.systemDefault());
-                for (Database.LogEntry registro : banco.listLogs()) {
-                    String texto = registro.message();
-                    texto = texto.replace("<login_name>",
-                            registro.login() == null ? "não identificado" : registro.login());
-                    texto = texto.replace("<arq_name>",
-                            registro.fileName() == null ? "não informado" : registro.fileName());
+                for (Database.LogEntry entry : database.listLogs()) {
+                    String text = entry.message();
+                    text = text.replace("<login_name>",
+                            entry.login() == null ? "não identificado" : entry.login());
+                    text = text.replace("<arq_name>",
+                            entry.fileName() == null ? "não informado" : entry.fileName());
                     System.out.printf("%s | %04d | %s%n",
-                            formato.format(Instant.ofEpochMilli(registro.timestamp())),
-                            registro.eventCode(), texto);
+                            formatter.format(Instant.ofEpochMilli(entry.timestamp())),
+                            entry.eventCode(), text);
                 }
             }
         } catch (Exception error) {
             System.err.println("Acesso negado: " + message(error));
         } finally {
-            CryptoUtils.clear(frase);
+            CryptoUtils.clear(passphrase);
         }
     }
 
