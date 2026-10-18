@@ -1,3 +1,9 @@
+/*
+ * Trabalho 3 — INF1416 — Cofre Digital
+ *
+ * Breno de Andrade Soares — Matrícula: 2320363
+ * João Pedro Zaidman dos Santos Gonçalves — Matrícula: 2320464
+ */
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
