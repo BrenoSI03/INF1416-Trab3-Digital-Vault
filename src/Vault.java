@@ -127,9 +127,10 @@ public class Vault {
                     || fields[2].isBlank() || !identifiers.add(key)) {
                 throw new Exception("Linha inválida no arquivo share.");
             }
-            if (files.containsKey(fields[0])) {
-                result.add(new ShareEntry(fields[0], id, fields[2]));
+            if (!files.containsKey(fields[0])) {
+                throw new Exception("O arquivo share referencia um código ausente no index.");
             }
+            result.add(new ShareEntry(fields[0], id, fields[2]));
         }
         return result;
     }

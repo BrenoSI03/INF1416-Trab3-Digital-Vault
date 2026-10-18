@@ -34,6 +34,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
+import javax.swing.SwingWorker;
 import javax.swing.SwingUtilities;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.text.AbstractDocument;
@@ -261,27 +262,62 @@ public class DigitalVault {
             distributeDigits(keys);
         });
         okButton.addActionListener(event -> {
+            List<char[]> submittedPairs = new ArrayList<>();
+            for (char[] pair : pairs) {
+                submittedPairs.add(pair.clone());
+            }
+            String passwordHash = currentUser.passwordHash();
+            long userUid = currentUser.uid();
             okButton.setEnabled(false);
+            clearButton.setEnabled(false);
+            for (JButton key : keys) {
+                key.setEnabled(false);
+            }
             // Uma senha de 10 dígitos gera até 1024 candidatas no bcrypt, o que pode levar alguns segundos.
             window.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-            try {
-                char[] password = findPassword(pairs, currentUser.passwordHash());
-                if (password == null) {
-                    handlePasswordFailure();
-                    if (currentUser != null) {
-                        okButton.setEnabled(true);
-                    }
-                    return;
+
+            new SwingWorker<char[], Void>() {
+                @Override
+                protected char[] doInBackground() {
+                    return findPassword(submittedPairs, passwordHash);
                 }
-                recordPasswordSuccess(database, currentUser.uid());
-                verifiedPassword = password;
-                showToken();
-            } catch (Exception error) {
-                showError(error);
-                okButton.setEnabled(true);
-            } finally {
-                window.setCursor(Cursor.getDefaultCursor());
-            }
+
+                @Override
+                protected void done() {
+                    char[] password = null;
+                    boolean passwordRetained = false;
+                    try {
+                        password = get();
+                        if (closed) {
+                            return;
+                        }
+                        if (password == null) {
+                            handlePasswordFailure();
+                            return;
+                        }
+                        recordPasswordSuccess(database, userUid);
+                        verifiedPassword = password;
+                        passwordRetained = true;
+                        showToken();
+                    } catch (Exception error) {
+                        Throwable cause = error.getCause();
+                        showError(cause instanceof Exception exception ? exception : error);
+                    } finally {
+                        if (!passwordRetained) {
+                            CryptoUtils.clear(password);
+                        }
+                        for (char[] pair : submittedPairs) {
+                            CryptoUtils.clear(pair);
+                        }
+                        window.setCursor(Cursor.getDefaultCursor());
+                        okButton.setEnabled(true);
+                        clearButton.setEnabled(true);
+                        for (JButton key : keys) {
+                            key.setEnabled(true);
+                        }
+                    }
+                }
+            }.execute();
         });
         showPanel(panel);
     }

@@ -885,14 +885,15 @@ public class Tests {
                     .getBytes(StandardCharsets.US_ASCII), admin, () ->
                     cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
                     false, "ID de share não positivo recusado");
-            testMetadata(pastaVault, "share", ("INEXISTENTE 2 recipient@teste.local\n"
-                    + "TST900 7 recipient@teste.local\n").getBytes(StandardCharsets.US_ASCII),
-                    admin, () -> {
-                        Vault.Catalog semReferencia = cofre.listFiles(pastaVault, usuario,
-                                admin.privateKey(), admin.certificate());
-                        check(semReferencia.shares().size() == 1,
-                                "share sem referência no index não entra no catálogo");
-                    }, true, "share sem referência no index é ignorado");
+            testMetadata(pastaVault, "share", "INEXISTENTE 2 recipient@teste.local\n"
+                    .getBytes(StandardCharsets.US_ASCII), admin, () ->
+                    cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
+                    false, "share sem referência no index é recusado");
+            testMetadata(pastaVault, "share", ("TST900 7 recipient@teste.local\n"
+                    + "INEXISTENTE 2 recipient@teste.local\n").getBytes(StandardCharsets.US_ASCII),
+                    admin, () ->
+                    cofre.listFiles(pastaVault, usuario, admin.privateKey(), admin.certificate()),
+                    false, "share inteiro é recusado quando uma referência não existe");
             testMetadata(pastaVault, "share", ("TST900 2 recipient@teste.local\n"
                     + "TST900 2 owner@teste.local\n").getBytes(StandardCharsets.US_ASCII),
                     admin, () -> cofre.listFiles(pastaVault, usuario,
