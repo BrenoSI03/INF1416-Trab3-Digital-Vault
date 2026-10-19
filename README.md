@@ -47,7 +47,7 @@ Para compilar diretamente pelo PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force build
-javac -encoding UTF-8 -cp "lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" -d build src\*.java tests\Tests.java
+javac -cp "lib\*" -d build src\*.java
 ```
 
 Ou, usando CMake:
@@ -61,7 +61,7 @@ cmake --build cmake-build
 Para executar diretamente pelo PowerShell:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" DigitalVault
+java -cp "build;lib\*" DigitalVault demonstracao-manual.db
 ```
 
 Ou, usando CMake:
@@ -70,12 +70,12 @@ Ou, usando CMake:
 cmake --build cmake-build --target run
 ```
 
-Sem argumentos, a aplicação utiliza o arquivo `cofre.db` no diretório atual.
-Para selecionar outro banco de dados, informe seu caminho como primeiro
-argumento:
+O argumento `demonstracao-manual.db` é o banco que será criado ou utilizado. É
+possível trocar esse nome por outro caminho. Sem o argumento, a aplicação usa
+`cofre.db` no diretório atual:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" DigitalVault caminho-do-banco.db
+java -cp "build;lib\*" DigitalVault
 ```
 
 O total de acessos aumenta após o login completo, e o total de consultas aumenta
@@ -89,8 +89,8 @@ sem mostrá-la na tela. Informe o caminho da chave privada do administrador e,
 se necessário, o caminho do banco de dados:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" LogView caminho-da-chave.key
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" LogView caminho-da-chave.key caminho-do-banco.db
+java -cp "build;lib\*" LogView caminho-da-chave.key
+java -cp "build;lib\*" LogView caminho-da-chave.key caminho-do-banco.db
 ```
 
 ## Testes
@@ -98,10 +98,11 @@ java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar
 Os testes principais criam identidades, certificados, banco e cofre independentes
 em `tests/additional-data`.
 
-Para executar o teste diretamente pelo PowerShell:
+Para compilar e executar os testes diretamente pelo PowerShell:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" Tests
+javac -cp "build;lib\*" -d build tests\Tests.java
+java -cp "build;lib\*" Tests
 ```
 
 Ou, usando CMake:
@@ -120,7 +121,7 @@ terminal sem serem exibidas.
 Para executar diretamente pelo PowerShell:
 
 ```powershell
-java --enable-native-access=ALL-UNNAMED -cp "build;lib\bcprov-jdk18on-1.80.2.jar;lib\sqlite-jdbc-3.41.2.2.jar;lib\core-3.5.4.jar" Tests --package-t3
+java -cp "build;lib\*" Tests --package-t3
 ```
 
 Ou, usando CMake:
